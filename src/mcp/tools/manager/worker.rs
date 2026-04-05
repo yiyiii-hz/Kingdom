@@ -15,7 +15,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) {
-    dispatcher.register(Box::new(WorkerCreateTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerCreateTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+        None,
+    )));
     dispatcher.register(Box::new(WorkerAssignTool::new(Arc::clone(&storage), Arc::clone(&push))));
     dispatcher.register(Box::new(WorkerReleaseTool::new(Arc::clone(&storage), Arc::clone(&push))));
     dispatcher.register(Box::new(WorkerGrantTool::new(Arc::clone(&storage), Arc::clone(&push))));
@@ -23,19 +27,41 @@ pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<Rw
     dispatcher.register(Box::new(WorkerSwapTool::new(storage, push)));
 }
 
-#[derive(Deserialize)]
-struct WorkerCreateParams {
-    provider: Option<String>,
+pub fn register_with_launcher(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+    launcher: Arc<crate::process::launcher::ProcessLauncher>,
+) {
+    dispatcher.register(Box::new(WorkerCreateTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+        Some(launcher),
+    )));
+    dispatcher.register(Box::new(WorkerAssignTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerReleaseTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerGrantTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerRevokeTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerSwapTool::new(storage, push)));
 }
 
 pub struct WorkerCreateTool {
     storage: Arc<Storage>,
     push: Arc<RwLock<PushRegistry>>,
+    launcher: Option<Arc<crate::process::launcher::ProcessLauncher>>,
 }
 
 impl WorkerCreateTool {
-    pub fn new(storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) -> Self {
-        Self { storage, push }
+    pub fn new(
+        storage: Arc<Storage>,
+        push: Arc<RwLock<PushRegistry>>,
+        launcher: Option<Arc<crate::process::launcher::ProcessLauncher>>,
+    ) -> Self {
+        Self {
+            storage,
+            push,
+            launcher,
+        }
     }
 }
 
@@ -51,42 +77,74 @@ impl Tool for WorkerCreateTool {
 
     async fn call(&self, params: Value, caller: &ConnectedClient) -> Result<Value, McpError> {
         let _ = &self.push;
-        let params = parse_params::<WorkerCreateParams>(params.clone())?;
-        let Some(provider) = params.provider.clone() else {
-            return Ok(Value::Null);
+        #[derive(serde::Deserialize)]
+        struct Params {
+            provider: String,
+            role: Option<String>,
+        }
+        let p: Params = parse_params(params.clone())?;
+        let role = match p.role.as_deref() {
+            Some("manager") => WorkerRole::Manager,
+            _ => WorkerRole::Worker,
         };
 
         let mut session = load_session(&self.storage)?;
+        let config =
+            crate::config::KingdomConfig::load_or_default(&self.storage.root.join("config.toml"));
+        if crate::process::discovery::ProviderDiscovery::check(&p.provider, &config).is_none() {
+            return Err(McpError::ValidationFailed {
+                field: "provider".to_string(),
+                reason: format!("provider '{}' not found", p.provider),
+            });
+        }
+
         let worker_id = format!("w{}", session.worker_seq + 1);
+        let worker_index = session.workers.len();
+
+        let (pid, pane_id) = if let Some(launcher) = &self.launcher {
+            let result = launcher
+                .launch(
+                    &p.provider,
+                    role.clone(),
+                    &worker_id,
+                    worker_index,
+                    &self.storage.root,
+                )
+                .await
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            (Some(result.pid), result.pane_id)
+        } else {
+            (None, String::new())
+        };
+
+        let worker = Worker {
+            id: worker_id.clone(),
+            provider: p.provider,
+            role,
+            status: WorkerStatus::Starting,
+            job_id: None,
+            pid,
+            pane_id,
+            mcp_connected: false,
+            context_usage_pct: None,
+            token_count: None,
+            last_heartbeat: None,
+            last_progress: None,
+            permissions: vec![],
+            started_at: Utc::now(),
+        };
+
+        session.workers.insert(worker_id.clone(), worker);
         session.worker_seq += 1;
-        session.workers.insert(
-            worker_id.clone(),
-            Worker {
-                id: worker_id.clone(),
-                provider,
-                role: WorkerRole::Worker,
-                status: WorkerStatus::Starting,
-                job_id: None,
-                pid: None,
-                pane_id: String::new(),
-                mcp_connected: false,
-                context_usage_pct: None,
-                token_count: None,
-                last_heartbeat: None,
-                last_progress: None,
-                permissions: vec![],
-                started_at: Utc::now(),
-            },
-        );
         save_session(&self.storage, &session)?;
         append_action_log(
             &self.storage,
             caller,
             self.name(),
-            json!({ "provider": params.provider }),
-            Some(json!({ "worker_id": worker_id })),
+            params,
+            None,
         )?;
-        Ok(Value::String(worker_id))
+        Ok(json!({ "worker_id": worker_id }))
     }
 }
 

@@ -41,6 +41,27 @@ pub fn register(
     failover::register(dispatcher, storage, push);
 }
 
+pub fn register_with_launcher(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+    notifications: Arc<Mutex<NotificationQueue>>,
+    health_events: Arc<Mutex<HealthEventQueue>>,
+    awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
+    launcher: Arc<crate::process::launcher::ProcessLauncher>,
+) {
+    let _ = (&notifications, &health_events);
+    workspace::register(dispatcher, Arc::clone(&storage), Arc::clone(&push));
+    worker::register_with_launcher(dispatcher, Arc::clone(&storage), Arc::clone(&push), launcher);
+    job::register(
+        dispatcher,
+        Arc::clone(&storage),
+        Arc::clone(&push),
+        Arc::clone(&awaiters),
+    );
+    failover::register(dispatcher, storage, push);
+}
+
 pub(crate) fn load_session(storage: &Storage) -> Result<Session, McpError> {
     storage
         .load_session()

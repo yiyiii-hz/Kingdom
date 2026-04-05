@@ -86,6 +86,25 @@ impl McpServer {
         }
     }
 
+    pub fn with_dispatcher(
+        workspace_hash: &str,
+        storage: Arc<Storage>,
+        dispatcher: Arc<Dispatcher>,
+        push_registry: Arc<RwLock<PushRegistry>>,
+    ) -> Self {
+        let (shutdown, _) = watch::channel(false);
+        Self {
+            workspace_hash: workspace_hash.to_string(),
+            storage,
+            dispatcher,
+            push_registry,
+            recent_calls: Arc::new(Mutex::new(RecentCalls::new())),
+            active_connections: Arc::new(RwLock::new(HashMap::new())),
+            shutdown,
+            listener_task: Arc::new(Mutex::new(None)),
+        }
+    }
+
     pub async fn start(&self) -> Result<(), ServerError> {
         tokio::fs::create_dir_all("/tmp/kingdom").await?;
         let socket_path = self.socket_path();

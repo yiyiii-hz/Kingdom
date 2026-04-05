@@ -76,4 +76,33 @@ impl Dispatcher {
         );
         dispatcher
     }
+
+    pub fn for_daemon(
+        storage: Arc<Storage>,
+        push: Arc<RwLock<PushRegistry>>,
+        notifications: Arc<Mutex<NotificationQueue>>,
+        health_events: Arc<Mutex<HealthEventQueue>>,
+        awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
+        launcher: Arc<crate::process::launcher::ProcessLauncher>,
+    ) -> Self {
+        let mut dispatcher = Self::new();
+        manager::register_with_launcher(
+            &mut dispatcher,
+            Arc::clone(&storage),
+            Arc::clone(&push),
+            Arc::clone(&notifications),
+            Arc::clone(&health_events),
+            Arc::clone(&awaiters),
+            launcher,
+        );
+        register_worker_tools(
+            &mut dispatcher,
+            storage,
+            push,
+            notifications,
+            health_events,
+            awaiters,
+        );
+        dispatcher
+    }
 }

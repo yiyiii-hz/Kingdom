@@ -1,7 +1,15 @@
+[workspace]
+members = [".", "crates/kingdom-watchdog"]
+resolver = "2"
+
 [package]
 name = "kingdom_v2"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "kingdom"
+path = "src/bin/kingdom.rs"
 
 [lib]
 name = "kingdom_v2"
@@ -10,9 +18,13 @@ path = "src/lib.rs"
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive"] }
+nix = { version = "0.27", features = ["signal", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
