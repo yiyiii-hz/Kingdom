@@ -2,5 +2,7 @@ pub mod cli_server;
 pub mod dispatcher;
 pub mod error;
 pub mod push;
+pub mod queues;
 pub mod replay;
 pub mod server;
+pub mod tools;
