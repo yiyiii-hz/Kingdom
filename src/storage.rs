@@ -1,7 +1,4 @@
-use crate::types::{
-    ActionLogEntry, CheckpointContent, GitStrategy, HandoffBrief, Job, JobResult,
-    NotificationMode, Session,
-};
+use crate::types::{ActionLogEntry, CheckpointContent, HandoffBrief, Job, JobResult, Session};
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
@@ -24,6 +21,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 pub enum StorageError {
     Io(io::Error),
     Json(serde_json::Error),
+    NoSession,
 }
 
 impl Display for StorageError {
@@ -31,6 +29,7 @@ impl Display for StorageError {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::Json(error) => write!(f, "{error}"),
+            Self::NoSession => write!(f, "no active session: call save_session before save_job"),
         }
     }
 }
@@ -93,7 +92,7 @@ impl Storage {
     }
 
     pub fn save_job(&self, job: &Job) -> Result<()> {
-        let mut session = self.load_session()?.unwrap_or_else(|| empty_session_for_job(job));
+        let mut session = self.load_session()?.ok_or(StorageError::NoSession)?;
         session.jobs.insert(job.id.clone(), job.clone());
         self.save_session(&session)
     }
@@ -207,33 +206,14 @@ fn render_handoff_markdown(brief: &HandoffBrief) -> String {
     output
 }
 
-fn empty_session_for_job(job: &Job) -> Session {
-    Session {
-        id: "sess_placeholder".to_string(),
-        workspace_path: String::new(),
-        workspace_hash: String::new(),
-        manager_id: None,
-        workers: Default::default(),
-        jobs: [(job.id.clone(), job.clone())].into_iter().collect(),
-        notes: Vec::new(),
-        worker_seq: 0,
-        job_seq: 0,
-        request_seq: 0,
-        git_strategy: GitStrategy::None,
-        available_providers: Vec::new(),
-        notification_mode: NotificationMode::Poll,
-        pending_requests: Default::default(),
-        pending_failovers: Default::default(),
-        created_at: chrono::Utc::now(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{
-        CheckpointMeta, FailoverReason, JobStatus, NoteScope, PendingFailover,
-        PendingFailoverStatus, PendingRequest, Worker, WorkerRole, WorkerStatus, WorkspaceNote,
+        CheckpointMeta, FailoverReason, GitStrategy, JobStatus, NotificationMode, NoteScope,
+        PendingFailover, PendingFailoverStatus, PendingRequest, Worker, WorkerRole, WorkerStatus,
+        WorkspaceNote,
     };
     use chrono::{TimeZone, Utc};
     use tempfile::tempdir;

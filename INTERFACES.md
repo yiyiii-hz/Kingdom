@@ -277,11 +277,13 @@ pub enum CheckpointUrgency {
 pub enum ManagerNotification {
     JobCompleted {
         job_id: String,
+        worker_id: String,      // 完成该 job 的 worker
         summary: String,
         changed_files: Vec<String>,
     },
     JobFailed {
         job_id: String,
+        worker_id: String,
         reason: String,
     },
     WorkerRequest {
@@ -294,15 +296,20 @@ pub enum ManagerNotification {
         job_id: String,
     },
     FailoverReady {
-        failover: FailoverRequest,
+        worker_id: String,
+        reason: FailoverReason,
+        candidates: Vec<String>,  // 推荐的 provider 列表
     },
     WorkerIdle {
         worker_id: String,
     },
+    WorkerReady {
+        worker_id: String,
+        provider: String,         // kingdom.hello 握手完成，Starting → Idle
+    },
     SubtaskCreated {
-        job_id: String,
         parent_job_id: String,
-        creator_worker_id: String,
+        subtask_job_id: String,
         intent: String,
     },
     CancelCascade {
