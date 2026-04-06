@@ -100,13 +100,15 @@ impl ProcessLauncher {
         worker_id: &str,
         worker_index: usize,
     ) -> Result<String, LaunchError> {
+        // Use "^" (first window) instead of "0" to support tmux configs with base-index 1.
+        let first_window = format!("{session_name}:^");
         let output = if worker_index == 0 {
             std::process::Command::new("tmux")
                 .args([
                     "split-window",
                     "-h",
                     "-t",
-                    &format!("{session_name}:0"),
+                    &first_window,
                     "-P",
                     "-F",
                     "#{pane_id}",
@@ -118,7 +120,7 @@ impl ProcessLauncher {
                     "split-window",
                     "-v",
                     "-t",
-                    &format!("{session_name}:0"),
+                    &first_window,
                     "-P",
                     "-F",
                     "#{pane_id}",
