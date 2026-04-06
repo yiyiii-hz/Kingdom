@@ -114,9 +114,20 @@ fn render_doctor_report(workspace: &Path, storage: &Storage) -> String {
 }
 
 fn dependency_lines() -> Vec<String> {
+    let socat_ok = command_success("which", &["socat"]);
+    let nc_ok = command_success("which", &["nc"]);
+    let bridge_line = if socat_ok {
+        "✓ socat   已安装（MCP bridge）".to_string()
+    } else if nc_ok {
+        "✓ nc      已安装（MCP bridge 备选）".to_string()
+    } else {
+        "✗ socat   未安装  → brew install socat".to_string()
+    };
+
     vec![
         versioned_binary_line("tmux", &["-V"], "→ brew install tmux"),
         versioned_binary_line("git", &["--version"], "→ brew install git"),
+        bridge_line,
         binary_line("codex", "→ npm install -g @openai/codex"),
         binary_line(
             "claude",

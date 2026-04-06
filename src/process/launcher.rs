@@ -176,11 +176,12 @@ impl ProcessLauncher {
             WorkerRole::Manager => "manager",
             WorkerRole::Worker => "worker",
         };
+        let (command, args) = bridge_command(&socket);
         serde_json::json!({
             "mcpServers": {
                 "kingdom": {
-                    "command": "socat",
-                    "args": [format!("UNIX-CONNECT:{socket}"), "-"],
+                    "command": command,
+                    "args": args,
                     "env": {
                         "KINGDOM_WORKER_ID": worker_id,
                         "KINGDOM_ROLE": role_str
@@ -190,6 +191,27 @@ impl ProcessLauncher {
         })
         .to_string()
     }
+}
+
+/// Returns the (command, args) to bridge stdio to a Unix socket.
+/// Prefers `socat` (most reliable), falls back to `nc -U` (pre-installed on macOS/Linux).
+fn bridge_command(socket: &str) -> (String, Vec<String>) {
+    if which_exists("socat") {
+        return (
+            "socat".into(),
+            vec![format!("UNIX-CONNECT:{socket}"), "-".into()],
+        );
+    }
+    // macOS nc and most Linux nc support -U for Unix sockets
+    ("nc".into(), vec!["-U".into(), socket.into()])
+}
+
+fn which_exists(binary: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(binary)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
