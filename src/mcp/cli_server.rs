@@ -159,6 +159,95 @@ async fn handle_command(
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             }
         }
+        Some("replay") => {
+            let job_id = match request.get("job_id").and_then(Value::as_str) {
+                Some(id) => id,
+                None => return json!({"ok": false, "error": "missing job_id"}),
+            };
+            let assign = request
+                .get("assign")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            let session = match storage.load_session() {
+                Ok(Some(session)) => session,
+                _ => return json!({"ok": false, "error": "no active session"}),
+            };
+            let original = match session.jobs.get(job_id) {
+                Some(job) => job.clone(),
+                None => return json!({"ok": false, "error": format!("job not found: {job_id}")}),
+            };
+
+            let mut next_seq = session.job_seq + 1;
+            while session
+                .jobs
+                .contains_key(&format!("job_{next_seq:03}"))
+            {
+                next_seq += 1;
+            }
+            let new_job_id = format!("job_{next_seq:03}");
+            let mut session = session;
+            session.jobs.insert(
+                new_job_id.clone(),
+                crate::types::Job {
+                    id: new_job_id.clone(),
+                    intent: original.intent.clone(),
+                    status: crate::types::JobStatus::Pending,
+                    worker_id: None,
+                    depends_on: vec![],
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    branch: None,
+                    branch_start_commit: None,
+                    checkpoints: vec![],
+                    result: None,
+                    fail_count: 0,
+                    last_fail_at: None,
+                },
+            );
+            session.job_seq = next_seq;
+
+            let assigned_worker = if assign {
+                let idle_worker = session
+                    .workers
+                    .values()
+                    .find(|worker| {
+                        worker.role == crate::types::WorkerRole::Worker
+                            && worker.status == crate::types::WorkerStatus::Idle
+                            && worker.job_id.is_none()
+                    })
+                    .map(|worker| worker.id.clone());
+
+                if let Some(worker_id) = idle_worker {
+                    if let Some(worker) = session.workers.get_mut(&worker_id) {
+                        worker.job_id = Some(new_job_id.clone());
+                        worker.status = crate::types::WorkerStatus::Running;
+                    }
+                    if let Some(job) = session.jobs.get_mut(&new_job_id) {
+                        job.worker_id = Some(worker_id.clone());
+                        job.status = crate::types::JobStatus::Running;
+                    }
+                    Some(worker_id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Err(error) = storage.save_session(&session) {
+                return json!({"ok": false, "error": error.to_string()});
+            }
+
+            json!({
+                "ok": true,
+                "data": {
+                    "new_job_id": new_job_id,
+                    "intent": original.intent,
+                    "assigned_worker": assigned_worker,
+                }
+            })
+        }
         Some("status") => json!({"ok": true, "data": {}}),
         Some("log") => json!({"ok": true, "data": {"entries": []}}),
         Some("shutdown") => json!({"ok": true, "data": {}}),
@@ -169,7 +258,7 @@ async fn handle_command(
 
 #[cfg(test)]
 mod tests {
-    use super::CliServer;
+    use super::{handle_command, CliServer};
     use crate::mcp::push::PushRegistry;
     use crate::storage::Storage;
     use crate::types::{
@@ -264,7 +353,7 @@ mod tests {
             .collect(),
             notes: vec![],
             worker_seq: 0,
-            job_seq: 0,
+            job_seq: 1,
             request_seq: 0,
             git_strategy: GitStrategy::None,
             available_providers: vec![
@@ -336,5 +425,90 @@ mod tests {
                 new_provider: "gemini".to_string(),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn test_cli_server_replay_creates_new_job() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(Storage::init(temp.path()).unwrap());
+        storage.save_session(&session(temp.path())).unwrap();
+        let (tx, _) = mpsc::channel(4);
+        let response = handle_command(
+            temp.path(),
+            &storage,
+            &tx,
+            &Arc::new(RwLock::new(PushRegistry::new())),
+            &json!({"cmd":"replay","job_id":"job_001","assign":false}),
+        )
+        .await;
+
+        assert_eq!(response["ok"], json!(true));
+        assert_eq!(response["data"]["new_job_id"], json!("job_002"));
+        let session = storage.load_session().unwrap().unwrap();
+        assert_eq!(session.jobs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_cli_server_replay_assign_attaches_idle_worker() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(Storage::init(temp.path()).unwrap());
+        let mut current = session(temp.path());
+        current.workers.get_mut("w1").unwrap().status = WorkerStatus::Idle;
+        current.workers.get_mut("w1").unwrap().job_id = None;
+        current.jobs.clear();
+        current.jobs.insert(
+            "job_001".to_string(),
+            Job {
+                id: "job_001".to_string(),
+                intent: "replay me".to_string(),
+                status: JobStatus::Completed,
+                worker_id: None,
+                depends_on: vec![],
+                created_at: ts(),
+                updated_at: ts(),
+                branch: None,
+                branch_start_commit: None,
+                checkpoints: vec![],
+                result: None,
+                fail_count: 0,
+                last_fail_at: None,
+            },
+        );
+        current.job_seq = 1;
+        storage.save_session(&current).unwrap();
+        let (tx, _) = mpsc::channel(4);
+        let response = handle_command(
+            temp.path(),
+            &storage,
+            &tx,
+            &Arc::new(RwLock::new(PushRegistry::new())),
+            &json!({"cmd":"replay","job_id":"job_001","assign":true}),
+        )
+        .await;
+
+        assert_eq!(response["ok"], json!(true));
+        let session = storage.load_session().unwrap().unwrap();
+        let replayed = session.jobs.get("job_002").unwrap();
+        assert_eq!(replayed.status, JobStatus::Running);
+        assert_eq!(replayed.worker_id.as_deref(), Some("w1"));
+        assert_eq!(session.workers["w1"].job_id.as_deref(), Some("job_002"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_server_replay_unknown_job() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(Storage::init(temp.path()).unwrap());
+        storage.save_session(&session(temp.path())).unwrap();
+        let (tx, _) = mpsc::channel(4);
+        let response = handle_command(
+            temp.path(),
+            &storage,
+            &tx,
+            &Arc::new(RwLock::new(PushRegistry::new())),
+            &json!({"cmd":"replay","job_id":"missing","assign":false}),
+        )
+        .await;
+
+        assert_eq!(response["ok"], json!(false));
     }
 }

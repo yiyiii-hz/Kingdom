@@ -59,6 +59,26 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+    Restart {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+    },
+    Replay {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        job_id: String,
+    },
+    #[command(name = "job-diff")]
+    JobDiff {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        job_id: String,
+    },
+    Open {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        target: String,
+    },
 }
 
 #[tokio::main]
@@ -137,6 +157,34 @@ async fn main() {
         } => {
             kingdom_v2::cli::clean::run_clean(workspace, dry_run, all).unwrap_or_else(|e| {
                 eprintln!("Clean error: {e}");
+                std::process::exit(1);
+            });
+        }
+        Commands::Restart { workspace } => {
+            kingdom_v2::cli::restart::run_restart(workspace)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                });
+        }
+        Commands::Replay { workspace, job_id } => {
+            kingdom_v2::cli::replay::run_replay(workspace, job_id)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                });
+        }
+        Commands::JobDiff { workspace, job_id } => {
+            kingdom_v2::cli::job_diff::run_job_diff(workspace, job_id).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
+        }
+        Commands::Open { workspace, target } => {
+            kingdom_v2::cli::open::run_open(workspace, target).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
                 std::process::exit(1);
             });
         }

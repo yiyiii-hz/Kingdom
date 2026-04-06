@@ -1,6 +1,7 @@
 use crate::failover::handoff::build_handoff_brief;
 use crate::failover::machine::FailoverCommand;
 use crate::failover::recommender::recommend_provider;
+use crate::cli::daemon_client::{send_cli_command, socket_path};
 use crate::mcp::push::PushRegistry;
 use crate::storage::Storage;
 use crate::types::{
@@ -10,8 +11,6 @@ use crate::types::{
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::sync::{mpsc, RwLock};
 
 pub async fn run_swap(
@@ -21,6 +20,10 @@ pub async fn run_swap(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let storage = Arc::new(Storage::init(&workspace)?);
+    let provider = match provider {
+        Some(provider) => Some(provider),
+        None => prompt_provider_selection(&storage, &worker_id)?,
+    };
     if try_swap_via_daemon(&workspace, &worker_id, provider.clone()).await? {
         println!("queued manual swap for worker");
         return Ok(());
@@ -28,6 +31,53 @@ pub async fn run_swap(
     queue_manual_swap(&storage, &workspace, &worker_id, provider, None, None).await?;
     println!("queued manual swap for worker");
     Ok(())
+}
+
+fn prompt_provider_selection(
+    storage: &Storage,
+    worker_id: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let session = match storage.load_session()? {
+        Some(session) => session,
+        None => return Ok(None),
+    };
+    let current_provider = session
+        .workers
+        .get(worker_id)
+        .map(|worker| worker.provider.as_str())
+        .unwrap_or("");
+    let candidates = available_swap_candidates(&session, current_provider);
+    if candidates.is_empty() {
+        println!("没有其他可用 provider，将由系统自动推荐。");
+        return Ok(None);
+    }
+
+    println!("选择目标 provider（当前：{current_provider}）：");
+    for (index, provider) in candidates.iter().enumerate() {
+        println!("  {}) {}", index + 1, provider);
+    }
+    print!("输入编号 [1]: ");
+    std::io::stdout().flush()?;
+
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let idx = line.trim().parse::<usize>().unwrap_or(1).saturating_sub(1);
+    let chosen = candidates.get(idx).copied().unwrap_or(candidates[0]);
+    Ok(Some(chosen.to_string()))
+}
+
+fn available_swap_candidates<'a>(
+    session: &'a crate::types::Session,
+    current_provider: &str,
+) -> Vec<&'a str> {
+    session
+        .available_providers
+        .iter()
+        .map(|provider| provider.as_str())
+        .filter(|provider| *provider != current_provider)
+        .collect()
 }
 
 pub async fn queue_manual_swap(
@@ -202,34 +252,17 @@ async fn try_swap_via_daemon(
     worker_id: &str,
     provider: Option<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let hash = crate::config::workspace_hash(workspace);
-    let socket_path = format!("/tmp/kingdom/{hash}-cli.sock");
-    let stream = match UnixStream::connect(&socket_path).await {
-        Ok(stream) => stream,
-        Err(_) => return Ok(false),
-    };
-    let mut reader = BufReader::new(stream);
     let request = serde_json::json!({
         "cmd": "swap",
         "worker_id": worker_id,
         "provider": provider,
     });
-    let mut bytes = serde_json::to_vec(&request)?;
-    bytes.push(b'\n');
-    reader.get_mut().write_all(&bytes).await?;
-    reader.get_mut().flush().await?;
-
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    let response: serde_json::Value = serde_json::from_str(&line)?;
-    if response["ok"].as_bool() == Some(true) {
-        return Ok(true);
+    let socket_path = socket_path(workspace);
+    match send_cli_command(&socket_path, request).await {
+        Ok(_) => Ok(true),
+        Err(error) if error.to_string() == "Kingdom daemon 未运行" => Ok(false),
+        Err(error) => Err(error),
     }
-    let error = response["error"]
-        .as_str()
-        .unwrap_or("daemon swap failed")
-        .to_string();
-    Err(error.into())
 }
 
 #[cfg(test)]
@@ -411,5 +444,23 @@ mod tests {
             .id
             .clone();
         assert!(checkpoint_id.starts_with("ckpt_fallback_"));
+    }
+
+    #[test]
+    fn test_swap_no_session_returns_none() {
+        let temp = tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        assert_eq!(prompt_provider_selection(&storage, "w1").unwrap(), None);
+    }
+
+    #[test]
+    fn test_swap_provider_list_filters_current() {
+        let temp = tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        let session = session(temp.path());
+        storage.save_session(&session).unwrap();
+
+        let candidates = available_swap_candidates(&session, "codex");
+        assert_eq!(candidates, vec!["claude", "gemini"]);
     }
 }

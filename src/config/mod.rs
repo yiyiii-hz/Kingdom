@@ -18,6 +18,8 @@ pub struct KingdomConfig {
     pub failover: FailoverConfig,
     #[serde(default)]
     pub cost: CostConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -75,6 +77,7 @@ impl KingdomConfig {
             health: HealthConfig::default(),
             failover: FailoverConfig::default(),
             cost: CostConfig::default(),
+            webhook: WebhookConfig::default(),
         }
     }
 
@@ -164,6 +167,25 @@ pub struct CostConfig {
     pub gemini_output_per_1m: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebhookConfig {
+    pub url: Option<String>,
+    #[serde(default = "default_webhook_events")]
+    pub events: Vec<String>,
+    #[serde(default = "default_webhook_timeout")]
+    pub timeout_seconds: u64,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            events: default_webhook_events(),
+            timeout_seconds: default_webhook_timeout(),
+        }
+    }
+}
+
 impl Default for CostConfig {
     fn default() -> Self {
         Self {
@@ -199,6 +221,18 @@ fn default_gemini_input_per_1m() -> f64 {
 
 fn default_gemini_output_per_1m() -> f64 {
     0.30
+}
+
+fn default_webhook_events() -> Vec<String> {
+    vec![
+        "job.completed".to_string(),
+        "job.failed".to_string(),
+        "failover.triggered".to_string(),
+    ]
+}
+
+fn default_webhook_timeout() -> u64 {
+    5
 }
 
 #[cfg(test)]
@@ -258,5 +292,19 @@ mod tests {
         assert_eq!(cfg.cost.codex_output_per_1m, 10.00);
         assert_eq!(cfg.cost.gemini_input_per_1m, 0.075);
         assert_eq!(cfg.cost.gemini_output_per_1m, 0.30);
+    }
+
+    #[test]
+    fn webhook_config_defaults() {
+        let cfg = KingdomConfig::default_config();
+        assert_eq!(cfg.webhook.timeout_seconds, 5);
+        assert_eq!(
+            cfg.webhook.events,
+            vec![
+                "job.completed".to_string(),
+                "job.failed".to_string(),
+                "failover.triggered".to_string()
+            ]
+        );
     }
 }
