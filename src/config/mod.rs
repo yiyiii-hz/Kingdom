@@ -12,6 +12,8 @@ pub struct KingdomConfig {
     pub idle: IdleConfig,
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    #[serde(default)]
+    pub health: HealthConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -66,6 +68,7 @@ impl KingdomConfig {
             providers: ProvidersConfig::default(),
             idle: IdleConfig::default(),
             notifications: NotificationsConfig::default(),
+            health: HealthConfig::default(),
         }
     }
 
@@ -89,6 +92,29 @@ pub fn workspace_hash(workspace_path: &Path) -> String {
         h = h.wrapping_mul(33).wrapping_add(b as u32);
     }
     format!("{:06x}", h & 0x00ff_ffff)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HealthConfig {
+    /// Interval between heartbeat checks (seconds). Default: 30
+    pub heartbeat_interval_seconds: u64,
+    /// Consecutive missed intervals before HeartbeatMissed event. Default: 2
+    pub heartbeat_timeout_count: u32,
+    /// Interval for process alive checks (seconds). Default: 5
+    pub process_check_interval_seconds: u64,
+    /// Minutes without job.progress before ProgressTimeout event. Default: 30
+    pub progress_timeout_minutes: u32,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_seconds: 30,
+            heartbeat_timeout_count: 2,
+            process_check_interval_seconds: 5,
+            progress_timeout_minutes: 30,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,5 +143,13 @@ mod tests {
     fn config_load_or_default_missing_file() {
         let cfg = KingdomConfig::load_or_default(std::path::Path::new("/nonexistent/config.toml"));
         assert_eq!(cfg.idle.timeout_minutes, 30);
+    }
+
+    #[test]
+    fn health_config_defaults() {
+        let cfg = KingdomConfig::default_config();
+        assert_eq!(cfg.health.heartbeat_interval_seconds, 30);
+        assert_eq!(cfg.health.heartbeat_timeout_count, 2);
+        assert_eq!(cfg.health.progress_timeout_minutes, 30);
     }
 }
