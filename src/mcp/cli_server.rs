@@ -179,10 +179,7 @@ async fn handle_command(
             };
 
             let mut next_seq = session.job_seq + 1;
-            while session
-                .jobs
-                .contains_key(&format!("job_{next_seq:03}"))
-            {
+            while session.jobs.contains_key(&format!("job_{next_seq:03}")) {
                 next_seq += 1;
             }
             let new_job_id = format!("job_{next_seq:03}");
@@ -289,6 +286,7 @@ mod tests {
                     "wm".to_string(),
                     Worker {
                         id: "wm".to_string(),
+                        index: 0,
                         provider: "claude".to_string(),
                         role: WorkerRole::Manager,
                         status: WorkerStatus::Idle,
@@ -308,6 +306,7 @@ mod tests {
                     "w1".to_string(),
                     Worker {
                         id: "w1".to_string(),
+                        index: 1,
                         provider: "codex".to_string(),
                         role: WorkerRole::Worker,
                         status: WorkerStatus::Running,

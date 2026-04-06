@@ -123,6 +123,7 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
                 "w0".to_string(),
                 crate::types::Worker {
                     id: "w0".to_string(),
+                    index: 0,
                     provider: manager_provider.clone(),
                     role: crate::types::WorkerRole::Manager,
                     status: crate::types::WorkerStatus::Starting,
@@ -256,7 +257,12 @@ fn confirm_resume(session: &crate::types::Session) -> Result<bool, Box<dyn std::
     let mut jobs = session.jobs.values().collect::<Vec<_>>();
     jobs.sort_by_key(|job| job.id.clone());
     for job in jobs {
-        println!("  {:<8} {:<24} {}", job.id, truncate(&job.intent, 20), describe_job(session, job));
+        println!(
+            "  {:<8} {:<24} {}",
+            job.id,
+            truncate(&job.intent, 20),
+            describe_job(session, job)
+        );
     }
     if !session.notes.is_empty() {
         println!("\nworkspace.notes:");
@@ -472,6 +478,7 @@ mod tests {
                 "w0".to_string(),
                 crate::types::Worker {
                     id: "w0".to_string(),
+                    index: 0,
                     provider: "codex".to_string(),
                     role: crate::types::WorkerRole::Manager,
                     status: crate::types::WorkerStatus::Idle,

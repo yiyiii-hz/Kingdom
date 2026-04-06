@@ -304,6 +304,10 @@ pub(crate) mod testsupport {
     pub(crate) fn worker(worker_id: &str, status: WorkerStatus) -> Worker {
         Worker {
             id: worker_id.to_string(),
+            index: worker_id
+                .strip_prefix('w')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1),
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status,

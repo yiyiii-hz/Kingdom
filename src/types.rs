@@ -72,6 +72,8 @@ pub struct CheckpointContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Worker {
     pub id: WorkerId,
+    #[serde(default)]
+    pub index: usize,
     pub provider: String,
     pub role: WorkerRole,
     pub status: WorkerStatus,
@@ -463,6 +465,7 @@ mod tests {
     fn sample_worker() -> Worker {
         Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,

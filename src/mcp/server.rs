@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 pub struct McpServer {
@@ -131,7 +132,10 @@ impl McpServer {
                     accepted = listener.accept() => {
                         let (stream, _) = match accepted {
                             Ok(value) => value,
-                            Err(_) => break,
+                            Err(error) => {
+                                tracing::error!(error = %error, "mcp accept failed");
+                                break;
+                            }
                         };
 
                         let storage = Arc::clone(&storage);
@@ -141,7 +145,7 @@ impl McpServer {
                         let active_connections = Arc::clone(&active_connections);
 
                         tokio::spawn(async move {
-                            let _ = handle_connection(
+                            if let Err(error) = handle_connection(
                                 stream,
                                 storage,
                                 dispatcher,
@@ -149,7 +153,10 @@ impl McpServer {
                                 recent_calls,
                                 active_connections,
                             )
-                            .await;
+                            .await
+                            {
+                                tracing::error!(error = %error, "mcp connection failed");
+                            }
                         });
                     }
                 }
@@ -186,6 +193,9 @@ async fn handle_connection(
     recent_calls: Arc<Mutex<RecentCalls>>,
     active_connections: Arc<RwLock<HashMap<String, ConnectedClient>>>,
 ) -> Result<(), ServerError> {
+    let connection_id = Uuid::new_v4().to_string();
+    tracing::info!(peer = %connection_id, "new connection");
+
     let (read_half, write_half) = tokio::io::split(stream);
     let writer = Arc::new(Mutex::new(write_half));
     let mut reader = BufReader::new(read_half);
@@ -225,6 +235,7 @@ async fn handle_connection(
     }
 
     let (caller, hello_response) = match perform_hello(
+        &connection_id,
         &hello_request,
         &storage,
         &dispatcher,
@@ -236,12 +247,23 @@ async fn handle_connection(
     {
         Ok(value) => value,
         Err(error_response) => {
+            tracing::warn!(
+                peer = %connection_id,
+                error = %json_error_message(&error_response),
+                "hello rejected"
+            );
             write_json_line(&writer, &error_response).await?;
             return Ok(());
         }
     };
 
     write_json_line(&writer, &hello_response).await?;
+    tracing::info!(
+        peer = %connection_id,
+        worker_id = caller.worker_id.as_deref().unwrap_or(""),
+        role = ?caller.role,
+        "hello ok"
+    );
 
     let dedupe_key = caller
         .worker_id
@@ -319,8 +341,20 @@ async fn handle_connection(
         }
 
         let params = request.get("params").cloned().unwrap_or(Value::Null);
+        tracing::info!(
+            method = %method,
+            worker_id = worker_id.as_deref().unwrap_or(""),
+            "tool call"
+        );
+        let started_at = Instant::now();
         match dispatcher.dispatch(&method, params, &caller).await {
             Ok(result) => {
+                tracing::info!(
+                    method = %method,
+                    worker_id = worker_id.as_deref().unwrap_or(""),
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "tool call finished"
+                );
                 recent_calls
                     .lock()
                     .await
@@ -336,6 +370,13 @@ async fn handle_connection(
                 .await?;
             }
             Err(error) => {
+                tracing::error!(
+                    method = %method,
+                    worker_id = worker_id.as_deref().unwrap_or(""),
+                    error = %error,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "tool call failed"
+                );
                 write_json_line(
                     &writer,
                     &json!({
@@ -353,22 +394,28 @@ async fn handle_connection(
         let mut connections = active_connections.write().await;
         connections.remove(&connection_id);
     }
-    if let Some(worker_id) = worker_id {
-        push_registry.write().await.deregister(&worker_id);
+    if let Some(worker_id) = worker_id.as_ref() {
+        push_registry.write().await.deregister(worker_id);
         let mut session = match storage.load_session()? {
             Some(session) => session,
             None => return Ok(()),
         };
-        if let Some(worker) = session.workers.get_mut(&worker_id) {
+        if let Some(worker) = session.workers.get_mut(worker_id.as_str()) {
             worker.mcp_connected = false;
             storage.save_session(&session)?;
         }
     }
-    let _ = role;
+    tracing::info!(
+        peer = %connection_id,
+        worker_id = worker_id.as_deref().unwrap_or(""),
+        role = ?role,
+        "disconnected"
+    );
     Ok(())
 }
 
 async fn perform_hello(
+    connection_id: &str,
     request: &Value,
     storage: &Arc<Storage>,
     dispatcher: &Arc<Dispatcher>,
@@ -441,7 +488,6 @@ async fn perform_hello(
         }
     };
 
-    let connection_id = Uuid::new_v4().to_string();
     let worker_id = match role {
         WorkerRole::Manager => {
             let manager_id = params
@@ -552,7 +598,7 @@ async fn perform_hello(
     }
 
     let caller = ConnectedClient {
-        connection_id,
+        connection_id: connection_id.to_string(),
         worker_id,
         role: role.clone(),
         session_id,
@@ -577,6 +623,15 @@ async fn perform_hello(
     });
 
     Ok((caller, response))
+}
+
+fn json_error_message(value: &Value) -> String {
+    value
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown error")
+        .to_string()
 }
 
 async fn write_json_line(
@@ -638,6 +693,7 @@ mod tests {
     fn sample_session() -> Session {
         let manager = Worker {
             id: "w0".to_string(),
+            index: 0,
             provider: "codex".to_string(),
             role: WorkerRole::Manager,
             status: WorkerStatus::Starting,
@@ -654,6 +710,7 @@ mod tests {
         };
         let worker = Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,
@@ -670,6 +727,7 @@ mod tests {
         };
         let worker_two = Worker {
             id: "w2".to_string(),
+            index: 2,
             ..worker.clone()
         };
 
@@ -807,6 +865,29 @@ mod tests {
 
         let response = read_line(&mut client).await;
         assert_eq!(response["error"]["code"], -32002);
+
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worker_hello_marks_worker_connected_and_returns_worker_tools() {
+        let (_temp, storage, server) = start_server("m2-worker-hello-tools").await;
+        let mut client = connect("m2-worker-hello-tools").await;
+
+        write_line(
+            &mut client,
+            json!({"jsonrpc":"2.0","id":"init","method":"kingdom.hello","params":{"role":"worker","session_id":"sess_abc123","worker_id":"w1"}}),
+        )
+        .await;
+
+        let response = read_line(&mut client).await;
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert!(tools.contains(&json!("job.progress")));
+        assert!(!tools.contains(&json!("worker.create")));
+
+        let session = storage.load_session().unwrap().unwrap();
+        assert!(session.workers["w1"].mcp_connected);
+        assert_eq!(session.workers["w1"].status, WorkerStatus::Idle);
 
         server.stop().await.unwrap();
     }

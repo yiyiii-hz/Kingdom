@@ -176,6 +176,7 @@ mod tests {
     fn session(root: &Path) -> Session {
         let worker = Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Running,

@@ -1,7 +1,7 @@
+use crate::cli::daemon_client::{send_cli_command, socket_path};
 use crate::failover::handoff::build_handoff_brief;
 use crate::failover::machine::FailoverCommand;
 use crate::failover::recommender::recommend_provider;
-use crate::cli::daemon_client::{send_cli_command, socket_path};
 use crate::mcp::push::PushRegistry;
 use crate::storage::Storage;
 use crate::types::{
@@ -290,6 +290,7 @@ mod tests {
                     "wm".to_string(),
                     Worker {
                         id: "wm".to_string(),
+                        index: 0,
                         provider: "claude".to_string(),
                         role: WorkerRole::Manager,
                         status: WorkerStatus::Idle,
@@ -309,6 +310,7 @@ mod tests {
                     "w1".to_string(),
                     Worker {
                         id: "w1".to_string(),
+                        index: 1,
                         provider: "codex".to_string(),
                         role: WorkerRole::Worker,
                         status: WorkerStatus::Running,

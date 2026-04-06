@@ -1,6 +1,6 @@
 # Kingdom v2
 
-> Chinese version: [README.zh.md](./README.zh.md)
+> Bilingual versions: [English](./README.en.md) | [中文](./README.zh.md)
 
 Terminal-native AI worker orchestration. Multiple providers, one session, automatic failover.
 
@@ -42,8 +42,10 @@ Kingdom keeps work running when providers fail. When Codex hits a context limit 
 git clone https://github.com/your-org/kingdom-v2
 cd kingdom-v2
 cargo build --release
-cp target/release/kingdom ~/.local/bin/
+cp target/release/kingdom target/release/kingdom-watchdog target/release/kingdom-bridge ~/.local/bin/
 ```
+
+> **Important:** `kingdom`, `kingdom-watchdog`, and `kingdom-bridge` must be in the **same directory**. At runtime, `kingdom-watchdog` locates `kingdom` by looking in its own directory, and the `kingdom` daemon locates `kingdom-bridge` the same way. Placing them in different locations will cause startup errors.
 
 Verify:
 
@@ -221,18 +223,26 @@ gemini_output_per_1m = 0.30
 
 ```
 kingdom up
-  ├── daemon          Unix socket server, owns session state
-  │     ├── MCP server    tools for manager + workers to call
+  ├── daemon            Unix socket server, owns session state
+  │     ├── MCP server      tools for manager + workers to call
   │     ├── health monitor  heartbeat + process checks per worker
   │     └── failover machine  detects failure → triggers handoff
-  ├── watchdog        separate process, restarts daemon if it crashes
-  ├── manager pane    one AI provider running in tmux (reads workspace, dispatches jobs)
-  └── worker panes    one provider per pane, each connected via MCP
+  ├── watchdog          separate process, restarts daemon if it crashes
+  ├── manager pane      one AI provider in tmux, connected via kingdom-bridge
+  │     └── kingdom-bridge  translates standard MCP ↔ Kingdom custom protocol
+  └── worker panes      one provider per pane, each with its own kingdom-bridge
+        └── kingdom-bridge  same adapter, role=worker
 ```
 
 ### MCP protocol
 
-All communication goes through MCP tool calls over a Unix socket — no screen scraping, no pane injection. Workers call tools like `job.progress`, `job.checkpoint`, and `job.done`; the manager calls `worker.create`, `worker.send`, and `workspace.status`. Kingdom is the source of truth; provider self-reports are not trusted until verified.
+AI providers (claude, codex, gemini) speak standard MCP over stdio. `kingdom-bridge` runs as a subprocess of each provider and translates:
+
+```
+claude/codex/gemini  ──(standard MCP stdio)──  kingdom-bridge  ──(kingdom.hello + JSON-RPC)──  daemon socket
+```
+
+Workers call tools like `job.progress`, `job.checkpoint`, and `job.complete`; the manager calls `worker.create`, `worker.assign`, and `workspace.status`. Kingdom is the source of truth; provider self-reports are not trusted until verified.
 
 ### Failover
 

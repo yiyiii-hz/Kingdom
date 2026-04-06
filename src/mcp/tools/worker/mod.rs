@@ -301,6 +301,7 @@ pub(crate) mod testsupport {
         let mut session = session_with_workspace(temp.path().to_str().unwrap());
         let worker = Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Running,

@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 
 use crate::types::{ActionLogEntry, WorkerStatus};
 
@@ -10,9 +14,16 @@ pub async fn run_daemon(workspace: PathBuf) -> Result<(), Box<dyn std::error::Er
         .unwrap_or_else(|_| workspace.clone());
     let storage = Arc::new(crate::storage::Storage::init(&workspace)?);
     let storage_root = storage.root.clone();
+    init_tracing(&storage_root)?;
 
     let pid = std::process::id();
     std::fs::write(storage_root.join("daemon.pid"), format!("{pid}\n"))?;
+    tracing::info!(
+        workspace = %workspace.display(),
+        storage_root = %storage_root.display(),
+        pid,
+        "daemon started"
+    );
 
     let hash = crate::config::workspace_hash(&workspace);
     let config_path = storage_root.join("config.toml");
@@ -116,9 +127,47 @@ pub async fn run_daemon(workspace: PathBuf) -> Result<(), Box<dyn std::error::Er
         .recv()
         .await;
 
+    tracing::info!("daemon shutting down");
     server.stop().await?;
     let _ = std::fs::remove_file(storage_root.join("daemon.pid"));
     Ok(())
+}
+
+fn init_tracing(storage_root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let log_path = storage_root.join("daemon.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let filter = EnvFilter::try_from_env("KINGDOM_LOG").or_else(|_| EnvFilter::try_new("info"))?;
+    let timer = DaemonLogTimer;
+    let format = tracing_subscriber::fmt::format()
+        .with_timer(timer)
+        .with_level(true)
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .compact();
+    let subscriber = tracing_subscriber::registry().with(filter).with(
+        tracing_subscriber::fmt::layer()
+            .event_format(format)
+            .with_ansi(false)
+            .with_writer(move || {
+                file.try_clone()
+                    .expect("failed to clone daemon log file handle")
+            }),
+    );
+
+    tracing::subscriber::set_global_default(subscriber)?;
+    Ok(())
+}
+
+struct DaemonLogTimer;
+
+impl FormatTime for DaemonLogTimer {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        write!(w, "[{}]", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
+    }
 }
 
 pub async fn ensure_manager_started(
@@ -140,17 +189,12 @@ pub async fn ensure_manager_started(
         return;
     }
 
-    let worker_index = session
-        .workers
-        .keys()
-        .position(|worker_id| worker_id == &manager_id)
-        .unwrap_or(0);
     let launched = launcher
         .launch(
             &manager.provider,
             manager.role.clone(),
             &manager_id,
-            worker_index,
+            manager.index,
             &storage.root,
         )
         .await;
@@ -242,6 +286,7 @@ mod tests {
                 "w0".to_string(),
                 Worker {
                     id: "w0".to_string(),
+                    index: 0,
                     provider: "codex".to_string(),
                     role: WorkerRole::Manager,
                     status: WorkerStatus::Starting,

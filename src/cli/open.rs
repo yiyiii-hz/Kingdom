@@ -6,8 +6,8 @@ pub fn run_open(workspace: PathBuf, target: String) -> Result<(), Box<dyn std::e
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let storage = Storage::init(&workspace)?;
     let session = storage.load_session()?.ok_or("no active session")?;
-    let pane_id =
-        resolve_pane_id(&session, &target).ok_or_else(|| format!("找不到 worker 或 job：{target}"))?;
+    let pane_id = resolve_pane_id(&session, &target)
+        .ok_or_else(|| format!("找不到 worker 或 job：{target}"))?;
 
     if pane_id.is_empty() {
         println!("pane 已关闭（job 已结束）。");
@@ -29,7 +29,10 @@ fn resolve_pane_id(session: &Session, target: &str) -> Option<String> {
     }
     if let Some(job) = session.jobs.get(target) {
         if let Some(worker_id) = &job.worker_id {
-            return session.workers.get(worker_id).map(|worker| worker.pane_id.clone());
+            return session
+                .workers
+                .get(worker_id)
+                .map(|worker| worker.pane_id.clone());
         }
         return Some(String::new());
     }
@@ -59,6 +62,7 @@ mod tests {
                 "w1".to_string(),
                 Worker {
                     id: "w1".to_string(),
+                    index: 1,
                     provider: "codex".to_string(),
                     role: WorkerRole::Worker,
                     status: WorkerStatus::Idle,
@@ -137,7 +141,10 @@ mod tests {
 
     #[test]
     fn test_open_resolve_by_job_id() {
-        assert_eq!(resolve_pane_id(&session(), "job_001"), Some("%1".to_string()));
+        assert_eq!(
+            resolve_pane_id(&session(), "job_001"),
+            Some("%1".to_string())
+        );
     }
 
     #[test]

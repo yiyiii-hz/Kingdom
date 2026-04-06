@@ -14,36 +14,55 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+use std::{
+    sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 type PendingMap = Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>;
+type SharedWriter = Arc<Mutex<Option<BufWriter<UnixStream>>>>;
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Write a timestamped line to /tmp/kingdom-bridge.log for debugging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionState {
+    Connected,
+    Disconnected,
+    Reconnecting,
+}
+
+struct BridgeRuntime {
+    state: Arc<Mutex<ConnectionState>>,
+    writer: SharedWriter,
+    tool_names: Arc<Mutex<Vec<String>>>,
+}
+
 fn log(msg: &str) {
-    use std::time::{SystemTime, UNIX_EPOCH};
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let line = format!("[{ts}] {msg}\n");
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/kingdom-bridge.log")
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    if let Some(path) = LOG_PATH.get() {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(line.as_bytes()));
+    }
     eprintln!("kingdom-bridge: {msg}");
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    log(&format!("starting: args={:?}", &args[1..]));
-
     let socket_path = args
         .get(1)
         .cloned()
         .or_else(|| std::env::var("KINGDOM_SOCKET").ok())
+        .map(normalize_socket_path)
         .unwrap_or_else(|| {
             log("socket path required (arg 1 or KINGDOM_SOCKET)");
             std::process::exit(1);
@@ -60,133 +79,104 @@ fn main() {
 
     let worker_id = std::env::var("KINGDOM_WORKER_ID").unwrap_or_default();
     let role = std::env::var("KINGDOM_ROLE").unwrap_or_else(|_| "worker".to_string());
+    init_log_path(&storage_root, &worker_id);
 
-    log(&format!("role={role} worker_id={worker_id} socket={socket_path}"));
+    log(&format!("starting: args={:?}", &args[1..]));
 
-    // Read session_id from state.json
-    let session_id = match read_session_id(&storage_root) {
-        Ok(id) => {
-            log(&format!("session_id={id}"));
-            id
-        }
-        Err(e) => {
-            log(&format!("failed to read session id: {e}"));
-            std::process::exit(1);
-        }
-    };
+    log(&format!(
+        "role={role} worker_id={worker_id} socket={socket_path}"
+    ));
 
-    // Connect to kingdom unix socket (retry up to 5s in case daemon is still initializing)
-    let stream = {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            match UnixStream::connect(&socket_path) {
-                Ok(s) => break s,
-                Err(e) => {
-                    if std::time::Instant::now() >= deadline {
-                        log(&format!("connect to {socket_path} failed: {e}"));
-                        std::process::exit(1);
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-            }
-        }
-    };
-
-    log("connected to kingdom socket");
-
-    let stream_read = match stream.try_clone() {
-        Ok(s) => s,
-        Err(e) => {
-            log(&format!("clone stream failed: {e}"));
-            std::process::exit(1);
-        }
-    };
-
-    let mut kingdom_reader = BufReader::new(stream_read);
-    let kingdom_writer = Arc::new(Mutex::new(BufWriter::new(stream)));
-
-    // Send kingdom.hello
-    let worker_id_val = if worker_id.is_empty() {
-        Value::Null
-    } else {
-        Value::String(worker_id.clone())
-    };
-
-    let hello = json!({
-        "jsonrpc": "2.0",
-        "id": "bridge-hello",
-        "method": "kingdom.hello",
-        "params": {
-            "role": role,
-            "session_id": session_id,
-            "worker_id": worker_id_val,
-        }
-    });
-
-    if let Err(e) = write_kingdom(&kingdom_writer, &hello) {
-        log(&format!("failed to send hello: {e}"));
-        std::process::exit(1);
-    }
-
-    // Read kingdom.hello response (synchronous, before starting background thread)
-    let mut hello_line = String::new();
-    match kingdom_reader.read_line(&mut hello_line) {
-        Ok(0) => {
-            log("kingdom closed connection after hello");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            log(&format!("read hello response failed: {e}"));
-            std::process::exit(1);
-        }
-        Ok(_) => {}
-    }
-
-    let hello_resp: Value = match serde_json::from_str(&hello_line) {
-        Ok(v) => v,
-        Err(e) => {
-            log(&format!("bad hello response json: {e}"));
-            std::process::exit(1);
-        }
-    };
-
-    if hello_resp.get("error").is_some() {
-        let msg = hello_resp["error"]["message"]
-            .as_str()
-            .unwrap_or("unknown");
-        log(&format!("kingdom.hello rejected: {msg} | full: {hello_resp}"));
-        std::process::exit(1);
-    }
-
-    log(&format!("hello ok, tools: {:?}", hello_resp["result"]["tools"]));
-
-    // Extract tool names from hello response
-    let tool_names: Vec<String> = hello_resp["result"]["tools"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Start background thread to route kingdom responses by id
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+    let (push_tx, push_rx) = mpsc::channel();
+    let runtime = BridgeRuntime {
+        state: Arc::new(Mutex::new(ConnectionState::Disconnected)),
+        writer: Arc::new(Mutex::new(None)),
+        tool_names: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    if let Err(e) = reconnect_to_kingdom(
+        &socket_path,
+        &storage_root,
+        &role,
+        &worker_id,
+        &runtime,
+        &pending,
+        &push_tx,
+        Duration::from_secs(5),
+    ) {
+        log(&format!("initial connect failed: {e}"));
+        std::process::exit(1);
+    }
+
+    let socket_path_for_thread = socket_path.clone();
+    let storage_root_for_thread = storage_root.clone();
+    let role_for_thread = role.clone();
+    let worker_id_for_thread = worker_id.clone();
     let pending_for_thread = Arc::clone(&pending);
-    std::thread::spawn(move || {
-        kingdom_reader_loop(kingdom_reader, pending_for_thread);
+    let push_tx_for_thread = push_tx.clone();
+    let state_for_thread = Arc::clone(&runtime.state);
+    let writer_for_thread = Arc::clone(&runtime.writer);
+    let tools_for_thread = Arc::clone(&runtime.tool_names);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(100));
+        if *state_for_thread.lock().unwrap() == ConnectionState::Connected {
+            continue;
+        }
+        let thread_runtime = BridgeRuntime {
+            state: Arc::clone(&state_for_thread),
+            writer: Arc::clone(&writer_for_thread),
+            tool_names: Arc::clone(&tools_for_thread),
+        };
+        if let Err(e) = reconnect_to_kingdom(
+            &socket_path_for_thread,
+            &storage_root_for_thread,
+            &role_for_thread,
+            &worker_id_for_thread,
+            &thread_runtime,
+            &pending_for_thread,
+            &push_tx_for_thread,
+            Duration::from_secs(30),
+        ) {
+            log(&format!("reconnect failed: {e}"));
+        }
     });
 
     // Serve standard MCP on stdio
-    run_mcp_server(&tool_names, &kingdom_writer, &pending);
+    run_mcp_server(&runtime, &pending, &push_rx);
+}
+
+fn init_log_path(storage_root: &str, worker_id: &str) {
+    let path = bridge_log_path(Path::new(storage_root), worker_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = LOG_PATH.set(path);
+}
+
+fn normalize_socket_path(socket: String) -> String {
+    socket
+        .strip_prefix("UNIX-CONNECT:")
+        .unwrap_or(&socket)
+        .to_string()
+}
+
+fn bridge_log_path(storage_root: &Path, worker_id: &str) -> PathBuf {
+    let worker_id = if worker_id.is_empty() {
+        "unknown"
+    } else {
+        worker_id
+    };
+    storage_root
+        .join("logs")
+        .join(format!("bridge-{worker_id}.log"))
 }
 
 /// Read session_id from <storage_root>/state.json
 fn read_session_id(storage_root: &str) -> Result<String, String> {
     let path = std::path::Path::new(storage_root).join("state.json");
     let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let v: Value =
-        serde_json::from_slice(&data).map_err(|e| format!("parse state.json: {e}"))?;
+    let v: Value = serde_json::from_slice(&data).map_err(|e| format!("parse state.json: {e}"))?;
     // Session is serialized with `#[serde(rename = "session_id")]`
     v["session_id"]
         .as_str()
@@ -195,14 +185,23 @@ fn read_session_id(storage_root: &str) -> Result<String, String> {
 }
 
 /// Background thread: reads from kingdom socket and routes responses to pending callers.
-/// Push notifications (no id or null id) are silently discarded.
-fn kingdom_reader_loop(mut reader: BufReader<UnixStream>, pending: PendingMap) {
+/// Push notifications (no id or null id) are forwarded through `push_tx`.
+fn kingdom_reader_loop(
+    mut reader: BufReader<UnixStream>,
+    pending: PendingMap,
+    push_tx: mpsc::Sender<Value>,
+) -> std::io::Result<()> {
     let mut line = String::new();
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) => break, // kingdom closed connection
-            Err(_) => break,
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "kingdom closed connection",
+                ))
+            }
+            Err(error) => return Err(error),
             Ok(_) => {}
         }
 
@@ -215,7 +214,10 @@ fn kingdom_reader_loop(mut reader: BufReader<UnixStream>, pending: PendingMap) {
         let id = match msg.get("id") {
             Some(Value::String(s)) => s.clone(),
             Some(Value::Number(n)) => n.to_string(),
-            _ => continue, // push notification — discard
+            _ => {
+                let _ = push_tx.send(msg);
+                continue;
+            }
         };
 
         if let Some(tx) = pending.lock().unwrap().remove(&id) {
@@ -225,17 +227,14 @@ fn kingdom_reader_loop(mut reader: BufReader<UnixStream>, pending: PendingMap) {
 }
 
 /// Main MCP server loop: reads JSON-RPC from stdin, writes to stdout.
-fn run_mcp_server(
-    tool_names: &[String],
-    kingdom_writer: &Arc<Mutex<BufWriter<UnixStream>>>,
-    pending: &PendingMap,
-) {
+fn run_mcp_server(runtime: &BridgeRuntime, pending: &PendingMap, push_rx: &mpsc::Receiver<Value>) {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     let mut call_counter: u64 = 0;
 
     for line in stdin.lock().lines() {
+        drain_push_notifications(&mut stdout, push_rx);
         let line = match line {
             Ok(l) => l,
             Err(_) => break,
@@ -262,11 +261,14 @@ fn run_mcp_server(
         let response = match method.as_str() {
             "initialize" => handle_initialize(&id_val),
             "ping" => json!({"jsonrpc":"2.0","id":id_val,"result":{}}),
-            "tools/list" => handle_tools_list(&id_val, tool_names),
+            "tools/list" => {
+                let tool_names = runtime.tool_names.lock().unwrap().clone();
+                handle_tools_list(&id_val, &tool_names)
+            }
             "tools/call" => {
                 call_counter += 1;
                 let call_id = format!("bridge-call-{call_counter}");
-                handle_tools_call(&id_val, &request, &call_id, kingdom_writer, pending)
+                handle_tools_call(&id_val, &request, &call_id, runtime, pending)
             }
             _ => json!({
                 "jsonrpc": "2.0",
@@ -314,9 +316,13 @@ fn handle_tools_call(
     mcp_id: &Value,
     request: &Value,
     call_id: &str,
-    kingdom_writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    runtime: &BridgeRuntime,
     pending: &PendingMap,
 ) -> Value {
+    if *runtime.state.lock().unwrap() != ConnectionState::Connected {
+        return reconnecting_response(mcp_id);
+    }
+
     let params = request.get("params").cloned().unwrap_or(Value::Null);
     let tool_name = params["name"].as_str().unwrap_or_default().to_string();
     let arguments = params
@@ -326,10 +332,7 @@ fn handle_tools_call(
 
     // Register pending channel before sending
     let (tx, rx) = mpsc::channel();
-    pending
-        .lock()
-        .unwrap()
-        .insert(call_id.to_string(), tx);
+    pending.lock().unwrap().insert(call_id.to_string(), tx);
 
     // Forward to kingdom
     let kingdom_req = json!({
@@ -339,9 +342,11 @@ fn handle_tools_call(
         "params": arguments
     });
 
-    if let Err(e) = write_kingdom(kingdom_writer, &kingdom_req) {
+    if let Err(e) = write_kingdom(&runtime.writer, &kingdom_req) {
         pending.lock().unwrap().remove(call_id);
-        return error_response(mcp_id, &format!("kingdom write error: {e}"));
+        mark_disconnected(runtime, pending);
+        log(&format!("kingdom write error: {e}"));
+        return reconnecting_response(mcp_id);
     }
 
     // Wait for kingdom response
@@ -377,6 +382,17 @@ fn handle_tools_call(
     }
 }
 
+fn reconnecting_response(id: &Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "content": [{"type": "text", "text": "Kingdom reconnecting, please retry"}],
+            "isError": true
+        }
+    })
+}
+
 fn error_response(id: &Value, msg: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -385,23 +401,21 @@ fn error_response(id: &Value, msg: &str) -> Value {
     })
 }
 
-fn write_kingdom(
-    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
-    value: &Value,
-) -> std::io::Result<()> {
-    let mut w = writer.lock().unwrap();
-    let mut bytes = serde_json::to_vec(value).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+fn write_kingdom(writer: &SharedWriter, value: &Value) -> std::io::Result<()> {
+    let mut guard = writer.lock().unwrap();
+    let w = guard.as_mut().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotConnected, "kingdom not connected")
     })?;
+    let mut bytes = serde_json::to_vec(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
     w.write_all(&bytes)?;
     w.flush()
 }
 
 fn write_mcp_response<W: Write>(writer: &mut W, value: &Value) -> std::io::Result<()> {
-    let mut bytes = serde_json::to_vec(value).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
+    let mut bytes = serde_json::to_vec(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
     writer.write_all(&bytes)?;
     writer.flush()
@@ -464,9 +478,157 @@ fn tool_description(name: &str) -> &'static str {
     }
 }
 
+fn hello_request(role: &str, session_id: &str, worker_id: &str) -> Value {
+    let worker_id_val = if worker_id.is_empty() {
+        Value::Null
+    } else {
+        Value::String(worker_id.to_string())
+    };
+    json!({
+        "jsonrpc": "2.0",
+        "id": "bridge-hello",
+        "method": "kingdom.hello",
+        "params": {
+            "role": role,
+            "session_id": session_id,
+            "worker_id": worker_id_val,
+        }
+    })
+}
+
+fn connect_with_retry(socket_path: &str, timeout: Duration) -> Result<UnixStream, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("connect to {socket_path} failed: {error}"));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+fn reconnect_to_kingdom(
+    socket_path: &str,
+    storage_root: &str,
+    role: &str,
+    worker_id: &str,
+    runtime: &BridgeRuntime,
+    pending: &PendingMap,
+    push_tx: &mpsc::Sender<Value>,
+    timeout: Duration,
+) -> Result<(), String> {
+    *runtime.state.lock().unwrap() = ConnectionState::Reconnecting;
+    wait_for_socket(socket_path, timeout)?;
+
+    let session_id = read_session_id(storage_root)?;
+    log(&format!("session_id={session_id}"));
+
+    let stream = connect_with_retry(socket_path, timeout)?;
+    log("connected to kingdom socket");
+    let stream_read = stream
+        .try_clone()
+        .map_err(|e| format!("clone stream failed: {e}"))?;
+    let mut reader = BufReader::new(stream_read);
+    let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+
+    let hello = hello_request(role, &session_id, worker_id);
+    write_kingdom(&writer, &hello).map_err(|e| format!("failed to send hello: {e}"))?;
+
+    let mut hello_line = String::new();
+    match reader.read_line(&mut hello_line) {
+        Ok(0) => return Err("kingdom closed connection after hello".to_string()),
+        Err(error) => return Err(format!("read hello response failed: {error}")),
+        Ok(_) => {}
+    }
+
+    let hello_resp: Value =
+        serde_json::from_str(&hello_line).map_err(|e| format!("bad hello response json: {e}"))?;
+    if hello_resp.get("error").is_some() {
+        let msg = hello_resp["error"]["message"].as_str().unwrap_or("unknown");
+        return Err(format!(
+            "kingdom.hello rejected: {msg} | full: {hello_resp}"
+        ));
+    }
+
+    log(&format!(
+        "hello ok, tools: {:?}",
+        hello_resp["result"]["tools"]
+    ));
+
+    let tool_names = hello_resp["result"]["tools"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    *runtime.tool_names.lock().unwrap() = tool_names;
+    *runtime.writer.lock().unwrap() = writer.lock().unwrap().take();
+    *runtime.state.lock().unwrap() = ConnectionState::Connected;
+
+    let reader_result = kingdom_reader_loop(reader, Arc::clone(pending), push_tx.clone());
+    if let Err(error) = reader_result {
+        log(&format!("kingdom reader stopped: {error}"));
+    }
+    mark_disconnected(runtime, pending);
+    Err("connection lost".to_string())
+}
+
+fn wait_for_socket(socket_path: &str, timeout: Duration) -> Result<(), String> {
+    let path = Path::new(socket_path);
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if path.exists() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "socket did not reappear within {}s",
+                timeout.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn mark_disconnected(runtime: &BridgeRuntime, pending: &PendingMap) {
+    *runtime.state.lock().unwrap() = ConnectionState::Disconnected;
+    *runtime.writer.lock().unwrap() = None;
+    let mut pending = pending.lock().unwrap();
+    for (_, tx) in pending.drain() {
+        let _ = tx.send(json!({
+            "jsonrpc": "2.0",
+            "error": {"message": "Kingdom reconnecting, please retry"}
+        }));
+    }
+}
+
+fn drain_push_notifications<W: Write>(writer: &mut W, push_rx: &mpsc::Receiver<Value>) {
+    while let Ok(msg) = push_rx.try_recv() {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "info",
+                "data": msg
+            }
+        });
+        if write_mcp_response(writer, &notification).is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream as StdUnixStream;
+    use std::thread;
 
     #[test]
     fn tool_schema_has_required_fields() {
@@ -489,5 +651,84 @@ mod tests {
         std::fs::write(dir.path().join("state.json"), state.to_string()).unwrap();
         let id = read_session_id(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(id, "sess_test123");
+    }
+
+    #[test]
+    fn bridge_log_path_uses_storage_logs_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = bridge_log_path(dir.path(), "w0");
+        assert_eq!(path, dir.path().join("logs/bridge-w0.log"));
+    }
+
+    #[test]
+    fn normalize_socket_path_accepts_socat_prefix() {
+        assert_eq!(
+            normalize_socket_path("UNIX-CONNECT:/tmp/kingdom.sock".to_string()),
+            "/tmp/kingdom.sock"
+        );
+    }
+
+    #[test]
+    fn worker_hello_request_includes_worker_id() {
+        let hello = hello_request("worker", "sess_1", "w1");
+        assert_eq!(hello["params"]["worker_id"], "w1");
+    }
+
+    #[test]
+    fn kingdom_reader_loop_forwards_push_notifications() {
+        let (server, client) = StdUnixStream::pair().unwrap();
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let (push_tx, push_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let reader = BufReader::new(server);
+            let _ = kingdom_reader_loop(reader, pending, push_tx);
+        });
+
+        let mut client_writer = client.try_clone().unwrap();
+        client_writer
+            .write_all(br#"{"jsonrpc":"2.0","method":"job.assigned","params":{"job_id":"j1"}}"#)
+            .unwrap();
+        client_writer.write_all(b"\n").unwrap();
+        drop(client_writer);
+        drop(client);
+
+        let msg = push_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg["method"], "job.assigned");
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn disconnected_tools_call_returns_retryable_error() {
+        let runtime = BridgeRuntime {
+            state: Arc::new(Mutex::new(ConnectionState::Reconnecting)),
+            writer: Arc::new(Mutex::new(None)),
+            tool_names: Arc::new(Mutex::new(Vec::new())),
+        };
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let response = handle_tools_call(
+            &json!("1"),
+            &json!({"params":{"name":"job.progress","arguments":{}}}),
+            "bridge-call-1",
+            &runtime,
+            &pending,
+        );
+        assert_eq!(
+            response["result"]["content"][0]["text"],
+            "Kingdom reconnecting, please retry"
+        );
+        assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn drain_push_notifications_emits_mcp_notification() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(json!({"method":"job.assigned","params":{"job_id":"j1"}}))
+            .unwrap();
+        let mut out = Vec::new();
+        drain_push_notifications(&mut out, &rx);
+        let text = String::from_utf8(out).unwrap();
+        let value: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(value["method"], "notifications/message");
+        assert_eq!(value["params"]["data"]["method"], "job.assigned");
     }
 }

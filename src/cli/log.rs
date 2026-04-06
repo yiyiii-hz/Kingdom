@@ -15,12 +15,16 @@ pub fn run_log(
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let storage = Storage::init(&workspace)?;
     let output = if let Some(job_id) = detail {
-        let session = storage.load_session()?.ok_or_else(|| "no active session".to_string())?;
+        let session = storage
+            .load_session()?
+            .ok_or_else(|| "no active session".to_string())?;
         render_job_detail(&storage, &session, &job_id)?
     } else if actions {
         render_actions_view(&storage.read_action_log(limit)?)
     } else {
-        let session = storage.load_session()?.ok_or_else(|| "no active session".to_string())?;
+        let session = storage
+            .load_session()?
+            .ok_or_else(|| "no active session".to_string())?;
         render_default_view(&session, &storage.read_action_log(None)?, Utc::now())
     };
     print!("{output}");
@@ -43,19 +47,19 @@ fn render_default_view(
             .as_ref()
             .map(|result| format_time(result.completed_at))
             .unwrap_or_else(|| "--:--".to_string());
-        let worker = job
-            .worker_id
-            .as_ref()
-            .and_then(|worker_id| session.workers.get(worker_id))
-            .map(|worker| format!("{}({})", capitalize(&worker.provider), worker.id))
-            .or_else(|| {
-                job.result.as_ref().and_then(|result| {
-                    session.workers.get(&result.worker_id).map(|worker| {
-                        format!("{}({})", capitalize(&worker.provider), worker.id)
+        let worker =
+            job.worker_id
+                .as_ref()
+                .and_then(|worker_id| session.workers.get(worker_id))
+                .map(|worker| format!("{}({})", capitalize(&worker.provider), worker.id))
+                .or_else(|| {
+                    job.result.as_ref().and_then(|result| {
+                        session.workers.get(&result.worker_id).map(|worker| {
+                            format!("{}({})", capitalize(&worker.provider), worker.id)
+                        })
                     })
                 })
-            })
-            .unwrap_or_else(|| "-".to_string());
+                .unwrap_or_else(|| "-".to_string());
         let duration = format_job_duration(job, now);
         let _ = writeln!(
             output,
@@ -84,7 +88,11 @@ fn render_default_view(
     output
 }
 
-fn render_job_detail(storage: &Storage, session: &Session, job_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn render_job_detail(
+    storage: &Storage,
+    session: &Session,
+    job_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     let job = session
         .jobs
         .get(job_id)
@@ -94,7 +102,11 @@ fn render_job_detail(storage: &Storage, session: &Session, job_id: &str) -> Resu
 
     let mut output = String::new();
     let _ = writeln!(output, "{}  {}", job.id, job.intent);
-    let _ = writeln!(output, "  created    {}  by manager", format_time(job.created_at));
+    let _ = writeln!(
+        output,
+        "  created    {}  by manager",
+        format_time(job.created_at)
+    );
 
     if let Some(worker_id) = &job.worker_id {
         if let Some(worker) = session.workers.get(worker_id) {
@@ -183,7 +195,11 @@ fn summarize_params(entry: &ActionLogEntry) -> String {
         parts.push(job_id.to_string());
     }
     if entry.action == "context.ping" {
-        if let Some(tokens) = entry.params.get("token_count").and_then(|value| value.as_u64()) {
+        if let Some(tokens) = entry
+            .params
+            .get("token_count")
+            .and_then(|value| value.as_u64())
+        {
             parts.push(format!("token: {tokens}"));
         }
     }
@@ -206,7 +222,10 @@ struct FailoverLine {
 fn failovers_by_job(entries: &[ActionLogEntry]) -> HashMap<String, Vec<FailoverLine>> {
     let mut grouped: HashMap<String, Vec<FailoverLine>> = HashMap::new();
     for entry in entries {
-        if !matches!(entry.action.as_str(), "failover.start" | "failover.triggered") {
+        if !matches!(
+            entry.action.as_str(),
+            "failover.start" | "failover.triggered"
+        ) {
             continue;
         }
         let Some(job_id) = entry.params.get("job_id").and_then(|value| value.as_str()) else {
@@ -218,7 +237,8 @@ fn failovers_by_job(entries: &[ActionLogEntry]) -> HashMap<String, Vec<FailoverL
             .and_then(|value| value.as_str())
             .map(capitalize)
             .unwrap_or_else(|| {
-                entry.params
+                entry
+                    .params
                     .get("provider")
                     .and_then(|value| value.as_str())
                     .map(capitalize)
@@ -231,11 +251,14 @@ fn failovers_by_job(entries: &[ActionLogEntry]) -> HashMap<String, Vec<FailoverL
             .and_then(|value| value.as_str())
             .map(capitalize)
             .unwrap_or_else(|| "Unknown".to_string());
-        grouped.entry(job_id.to_string()).or_default().push(FailoverLine {
-            timestamp: entry.timestamp,
-            providers: format!("{from_provider}→{to_provider}"),
-            reason: summarize_json(entry.params.get("reason").unwrap_or(&Value::Null)),
-        });
+        grouped
+            .entry(job_id.to_string())
+            .or_default()
+            .push(FailoverLine {
+                timestamp: entry.timestamp,
+                providers: format!("{from_provider}→{to_provider}"),
+                reason: summarize_json(entry.params.get("reason").unwrap_or(&Value::Null)),
+            });
     }
     grouped
 }
@@ -245,7 +268,9 @@ fn status_icon(status: &JobStatus) -> &'static str {
         JobStatus::Completed => "✓",
         JobStatus::Failed => "✗",
         JobStatus::Paused => "⚠",
-        JobStatus::Running | JobStatus::Pending | JobStatus::Waiting | JobStatus::Cancelling => "⏳",
+        JobStatus::Running | JobStatus::Pending | JobStatus::Waiting | JobStatus::Cancelling => {
+            "⏳"
+        }
         JobStatus::Cancelled => "-",
     }
 }
@@ -282,7 +307,10 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
-    let mut truncated = text.chars().take(max_chars.saturating_sub(1)).collect::<String>();
+    let mut truncated = text
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
     truncated.push('…');
     truncated
 }
@@ -310,7 +338,10 @@ fn capitalize(provider: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ActionLogEntry, CheckpointContent, CheckpointMeta, JobResult, Session, Worker, WorkerRole, WorkerStatus};
+    use crate::types::{
+        ActionLogEntry, CheckpointContent, CheckpointMeta, JobResult, Session, Worker, WorkerRole,
+        WorkerStatus,
+    };
     use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
 
@@ -321,6 +352,10 @@ mod tests {
     fn worker(id: &str, provider: &str) -> Worker {
         Worker {
             id: id.to_string(),
+            index: id
+                .strip_prefix('w')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1),
             provider: provider.to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,

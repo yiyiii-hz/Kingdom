@@ -230,12 +230,7 @@ impl TmuxController {
     }
 
     pub fn tmux_version() -> Option<(u32, u32)> {
-        parse_tmux_version(
-            &RealTmux
-                .run(&["-V".to_string()])
-                .ok()?
-                .stdout,
-        )
+        parse_tmux_version(&RealTmux.run(&["-V".to_string()]).ok()?.stdout)
     }
 
     pub fn supports_display_popup() -> bool {
@@ -244,7 +239,9 @@ impl TmuxController {
 
     fn supports_display_popup_inner(&self) -> bool {
         match self.ops.run(&["-V".to_string()]) {
-            Ok(response) => matches!(parse_tmux_version(&response.stdout), Some((major, minor)) if major > 3 || (major == 3 && minor >= 2)),
+            Ok(response) => {
+                matches!(parse_tmux_version(&response.stdout), Some((major, minor)) if major > 3 || (major == 3 && minor >= 2))
+            }
             Err(_) => false,
         }
     }
@@ -266,7 +263,11 @@ impl TmuxController {
 }
 
 fn popup_script_path(ext: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("kingdom_popup_{}.{}", uuid::Uuid::new_v4().simple(), ext))
+    std::env::temp_dir().join(format!(
+        "kingdom_popup_{}.{}",
+        uuid::Uuid::new_v4().simple(),
+        ext
+    ))
 }
 
 fn render_popup_script(popup: &Popup, result_path: &str) -> String {
@@ -305,14 +306,19 @@ fn render_popup_script(popup: &Popup, result_path: &str) -> String {
     } else {
         script.push_str("[ -z \"$choice\" ] && result='timeout'\n");
     }
-    script.push_str(&format!("printf '%s' \"$result\" > {}\n", sh_quote(result_path)));
+    script.push_str(&format!(
+        "printf '%s' \"$result\" > {}\n",
+        sh_quote(result_path)
+    ));
     script
 }
 
 fn read_popup_result(path: &PathBuf) -> Result<PopupResult> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(PopupResult::Dismissed),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PopupResult::Dismissed)
+        }
         Err(error) => return Err(TmuxError::Io(error)),
     };
     let trimmed = raw.trim();
@@ -374,8 +380,6 @@ pub(crate) mod testsupport {
                 .or_default()
                 .push_back(response);
         }
-
-
     }
 
     impl TmuxOps for MockTmux {
@@ -459,9 +463,14 @@ mod tests {
             timeout_secs: None,
             default_on_timeout: None,
         };
-        assert_eq!(controller.show_popup(&popup).unwrap(), PopupResult::Dismissed);
+        assert_eq!(
+            controller.show_popup(&popup).unwrap(),
+            PopupResult::Dismissed
+        );
         let calls = mock.calls.lock().unwrap();
-        assert!(calls.iter().any(|args| args.first().map(|arg| arg == "send-keys").unwrap_or(false)));
+        assert!(calls
+            .iter()
+            .any(|args| args.first().map(|arg| arg == "send-keys").unwrap_or(false)));
     }
 
     #[test]

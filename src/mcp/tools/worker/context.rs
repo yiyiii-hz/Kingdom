@@ -70,7 +70,10 @@ impl Tool for ContextPingTool {
         let mut session = load_session(&self.storage)?;
         let worker_id = worker_id(caller)?;
         let job_id = {
-            let worker = session.workers.get_mut(&worker_id).ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
+            let worker = session
+                .workers
+                .get_mut(&worker_id)
+                .ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
             worker.context_usage_pct = Some(params.usage_pct);
             worker.token_count = Some(params.token_count);
             worker.last_heartbeat = Some(Utc::now());

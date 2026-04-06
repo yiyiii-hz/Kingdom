@@ -41,10 +41,7 @@ pub fn send_notification(title: &str, body: &str, level: NotificationLevel) -> R
         NotificationLevel::System => {
             #[cfg(target_os = "macos")]
             {
-                let script = format!(
-                    "display notification {:?} with title {:?}",
-                    body, title
-                );
+                let script = format!("display notification {:?} with title {:?}", body, title);
                 std::process::Command::new("osascript")
                     .args(["-e", &script])
                     .output()?;

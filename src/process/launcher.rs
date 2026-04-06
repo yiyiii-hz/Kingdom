@@ -58,7 +58,7 @@ impl ProcessLauncher {
             .await
             .map_err(LaunchError::Io)?;
         let mcp_config_path = mcp_dir.join(format!("{worker_id}.json"));
-        let mcp_config = self.build_mcp_config(worker_id, role.clone());
+        let mcp_config = self.build_mcp_config(worker_id, role.clone(), storage_root);
         tokio::fs::write(&mcp_config_path, mcp_config)
             .await
             .map_err(LaunchError::Io)?;
@@ -103,10 +103,18 @@ impl ProcessLauncher {
         // Use "^" (first window) instead of "0" to support tmux configs with base-index 1.
         let first_window = format!("{session_name}:^");
         let output = if worker_index == 0 {
+            // Reuse the initial shell pane so we don't leave an empty shell alongside the manager.
+            let reuse = std::process::Command::new("tmux")
+                .args(["display-message", "-t", &first_window, "-p", "#{pane_id}"])
+                .output()
+                .map_err(|_| LaunchError::TmuxNotFound)?;
+            if reuse.status.success() && !String::from_utf8_lossy(&reuse.stdout).trim().is_empty() {
+                return Ok(String::from_utf8_lossy(&reuse.stdout).trim().to_string());
+            }
             std::process::Command::new("tmux")
                 .args([
                     "split-window",
-                    "-h",
+                    "-v",
                     "-t",
                     &first_window,
                     "-P",
@@ -170,9 +178,8 @@ impl ProcessLauncher {
             .map_err(|_| LaunchError::Other(format!("invalid pid: {pid_str}")))
     }
 
-    fn build_mcp_config(&self, worker_id: &str, role: WorkerRole) -> String {
+    fn build_mcp_config(&self, worker_id: &str, role: WorkerRole, storage_root: &Path) -> String {
         let socket = format!("/tmp/kingdom/{}.sock", self.workspace_hash);
-        let storage_root = self.workspace_path.join(".kingdom");
         let role_str = match role {
             WorkerRole::Manager => "manager",
             WorkerRole::Worker => "worker",
@@ -200,39 +207,52 @@ impl ProcessLauncher {
 /// properly handles the Kingdom custom protocol. Falls back to nc/socat for
 /// backward compatibility when kingdom-bridge is not yet installed.
 fn bridge_command(socket: &str, storage_root: &str) -> (String, Vec<String>) {
+    let socket_arg = format!("UNIX-CONNECT:{socket}");
     if let Some(bridge) = kingdom_bridge_path() {
         if bridge.exists() {
             return (
                 bridge.to_string_lossy().into_owned(),
-                vec![socket.to_string(), storage_root.to_string()],
+                vec![socket_arg.clone(), storage_root.to_string()],
             );
         }
+    }
+    if let Some(bridge) = which_path("kingdom-bridge") {
+        return (
+            bridge.to_string_lossy().into_owned(),
+            vec![socket_arg.clone(), storage_root.to_string()],
+        );
     }
     // Fallback: raw socket bridge (no protocol translation — workers will fail to
     // authenticate, but this preserves the old behavior while kingdom-bridge is
     // not yet installed).
     if which_exists("socat") {
-        return (
-            "socat".into(),
-            vec![format!("UNIX-CONNECT:{socket}"), "-".into()],
-        );
+        return ("socat".into(), vec![socket_arg, "-".into()]);
     }
     ("nc".into(), vec!["-U".into(), socket.into()])
 }
 
 /// Find kingdom-bridge in the same directory as the current executable.
 fn kingdom_bridge_path() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
+    let sibling = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("kingdom-bridge")))
+        .and_then(|p| p.parent().map(|d| d.join("kingdom-bridge")));
+    match sibling {
+        Some(path) if path.exists() => Some(path),
+        _ => std::env::var_os("CARGO_BIN_EXE_kingdom-bridge").map(PathBuf::from),
+    }
 }
 
 fn which_exists(binary: &str) -> bool {
+    which_path(binary).is_some()
+}
+
+fn which_path(binary: &str) -> Option<PathBuf> {
     std::process::Command::new("which")
         .arg(binary)
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
 }
 
 #[cfg(test)]

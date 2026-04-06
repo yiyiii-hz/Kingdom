@@ -450,6 +450,10 @@ mod tests {
     fn running_worker(id: &str, started_minutes_ago: i64) -> Worker {
         Worker {
             id: id.to_string(),
+            index: id
+                .strip_prefix('w')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1),
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Running,

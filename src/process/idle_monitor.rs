@@ -81,6 +81,10 @@ mod tests {
         let started = Utc::now() - chrono::Duration::minutes(idle_since_minutes);
         Worker {
             id: id.to_string(),
+            index: id
+                .strip_prefix('w')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(1),
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,

@@ -2,10 +2,7 @@ use crate::storage::Storage;
 use crate::types::{GitStrategy, Job};
 use std::path::PathBuf;
 
-pub fn run_job_diff(
-    workspace: PathBuf,
-    job_id: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_job_diff(workspace: PathBuf, job_id: String) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let storage = Storage::init(&workspace)?;
     let session = storage.load_session()?.ok_or("no active session")?;
@@ -28,7 +25,13 @@ pub fn run_job_diff(
     };
 
     let mut command = std::process::Command::new("git");
-    command.args(["-C", workspace.to_str().unwrap_or("."), "diff", &start_commit, "HEAD"]);
+    command.args([
+        "-C",
+        workspace.to_str().unwrap_or("."),
+        "diff",
+        &start_commit,
+        "HEAD",
+    ]);
     if let Some(files) = changed_files(job) {
         command.arg("--");
         command.args(files);
@@ -48,8 +51,8 @@ fn changed_files(job: &Job) -> Option<&[String]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Worker, WorkerRole, WorkerStatus};
     use crate::types::{JobStatus, NotificationMode, Session};
+    use crate::types::{Worker, WorkerRole, WorkerStatus};
     use chrono::Utc;
     use std::collections::HashMap;
 
@@ -60,6 +63,7 @@ mod tests {
     fn worker() -> Worker {
         Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,

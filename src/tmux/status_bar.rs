@@ -1,4 +1,6 @@
-use crate::types::{PendingFailoverStatus, ProviderStability, Session, Worker, WorkerRole, WorkerStatus};
+use crate::types::{
+    PendingFailoverStatus, ProviderStability, Session, Worker, WorkerRole, WorkerStatus,
+};
 use chrono::Utc;
 
 pub fn render_status_bar(session: &Session) -> String {
@@ -129,8 +131,8 @@ fn capitalize(provider: &str) -> String {
 mod tests {
     use super::*;
     use crate::types::{
-        GitStrategy, Job, JobStatus, NotificationMode, PendingFailover, Session, Worker, WorkerRole,
-        WorkspaceNote,
+        GitStrategy, Job, JobStatus, NotificationMode, PendingFailover, Session, Worker,
+        WorkerRole, WorkspaceNote,
     };
     use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
@@ -142,6 +144,10 @@ mod tests {
     fn worker(id: &str, provider: &str, role: WorkerRole, status: WorkerStatus) -> Worker {
         Worker {
             id: id.to_string(),
+            index: id
+                .strip_prefix('w')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0),
             provider: provider.to_string(),
             role,
             status,

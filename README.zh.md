@@ -1,6 +1,6 @@
 # Kingdom v2
 
-> English version: [README.en.md](./README.en.md)
+> Bilingual versions: [English](./README.en.md) | [中文](./README.zh.md)
 
 原生于终端的 AI worker 编排。多个 provider，一个会话，自动故障切换。
 
@@ -42,11 +42,7 @@
 git clone https://github.com/your-org/kingdom-v2
 cd kingdom-v2
 cargo build --release
-cargo build --release -p kingdom-watchdog
-cargo build --release -p kingdom-bridge
-cp target/release/kingdom ~/.local/bin/
-cp target/release/kingdom-watchdog ~/.local/bin/
-cp target/release/kingdom-bridge ~/.local/bin/
+cp target/release/kingdom target/release/kingdom-watchdog target/release/kingdom-bridge ~/.local/bin/
 ```
 
 > **重要：** `kingdom`、`kingdom-watchdog` 和 `kingdom-bridge` 必须放在**同一个目录**里。运行时，`kingdom-watchdog` 会通过它自己的所在目录去定位 `kingdom`，而 `kingdom` daemon 也会用同样的方式定位 `kingdom-bridge`。如果把它们放在不同位置，会导致启动报错。
@@ -227,18 +223,26 @@ gemini_output_per_1m = 0.30
 
 ```
 kingdom up
-  ├── daemon          Unix socket 服务器，持有 session 状态
-  │     ├── MCP server    供 manager + workers 调用的工具
+  ├── daemon            Unix socket 服务器，持有 session 状态
+  │     ├── MCP server      供 manager + workers 调用的工具
   │     ├── health monitor  每个 worker 的心跳 + 进程检查
   │     └── failover machine  检测故障 → 触发 handoff
-  ├── watchdog        独立进程，在 daemon 崩溃时重启它
-  ├── manager pane    tmux 中运行的一个 AI provider（读取工作区、分发 jobs）
-  └── worker panes    每个 pane 一个 provider，都通过 MCP 连接
+  ├── watchdog          独立进程，在 daemon 崩溃时重启它
+  ├── manager pane      tmux 中运行的一个 AI provider，通过 kingdom-bridge 连接
+  │     └── kingdom-bridge  负责在标准 MCP ↔ Kingdom 自定义协议之间转换
+  └── worker panes      每个 pane 一个 provider，每个 pane 都有自己的 kingdom-bridge
+        └── kingdom-bridge  相同的适配器，role=worker
 ```
 
 ### MCP 协议
 
-所有通信都通过 Unix socket 上的 MCP tool call 进行，没有 screen scraping，也没有 pane injection。worker 会调用 `job.progress`、`job.checkpoint`、`job.done` 之类的工具；manager 会调用 `worker.create`、`worker.send`、`workspace.status`。Kingdom 是唯一事实来源；provider 的自报状态在验证前都不可信。
+AI provider（claude、codex、gemini）通过 stdio 讲标准 MCP。`kingdom-bridge` 作为每个 provider 的子进程运行，并负责协议转换：
+
+```
+claude/codex/gemini  ──(标准 MCP stdio)──  kingdom-bridge  ──(kingdom.hello + JSON-RPC)──  daemon socket
+```
+
+worker 会调用 `job.progress`、`job.checkpoint`、`job.complete` 之类的工具；manager 会调用 `worker.create`、`worker.assign`、`workspace.status`。Kingdom 是唯一事实来源；provider 的自报状态在验证前都不可信。
 
 ### 故障切换
 

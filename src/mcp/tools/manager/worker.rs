@@ -127,7 +127,7 @@ impl Tool for WorkerCreateTool {
         }
 
         let worker_id = format!("w{}", session.worker_seq + 1);
-        let worker_index = session.workers.len();
+        let worker_index = session.worker_seq as usize + 1;
 
         let (pid, pane_id) = if let Some(launcher) = &self.launcher {
             let result = launcher
@@ -147,6 +147,7 @@ impl Tool for WorkerCreateTool {
 
         let worker = Worker {
             id: worker_id.clone(),
+            index: worker_index,
             provider: p.provider,
             role,
             status: WorkerStatus::Starting,

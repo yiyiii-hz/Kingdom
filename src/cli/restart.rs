@@ -103,7 +103,10 @@ fn print_provider_status(storage: &Storage) -> Result<(), Box<dyn std::error::Er
         }
         match worker.pid {
             Some(pid) if is_pid_alive(pid) => {
-                println!("  ✓ {} ({})  PID {}  进程存活", worker.id, worker.provider, pid);
+                println!(
+                    "  ✓ {} ({})  PID {}  进程存活",
+                    worker.id, worker.provider, pid
+                );
             }
             Some(pid) => {
                 println!(

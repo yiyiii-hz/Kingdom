@@ -31,7 +31,11 @@ pub async fn show_startup_progress(
 ) -> Result<()> {
     let start = tokio::time::Instant::now();
     loop {
-        let line = format!("⏳ 正在启动 {}... ({}s)", provider, start.elapsed().as_secs());
+        let line = format!(
+            "⏳ 正在启动 {}... ({}s)",
+            provider,
+            start.elapsed().as_secs()
+        );
         tmux.inject_line(pane_id, &line)?;
         tokio::select! {
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
@@ -94,7 +98,8 @@ mod tests {
         let tmux = TmuxController::with_ops("kingdom", ops);
         let (tx, rx) = tokio::sync::watch::channel(false);
 
-        let task = tokio::spawn(async move { show_startup_progress("%1", "codex", &tmux, rx).await });
+        let task =
+            tokio::spawn(async move { show_startup_progress("%1", "codex", &tmux, rx).await });
         tokio::task::yield_now().await;
         tx.send(true).unwrap();
         tokio::time::advance(tokio::time::Duration::from_secs(1)).await;
@@ -110,7 +115,8 @@ mod tests {
         let tmux = TmuxController::with_ops("kingdom", ops);
         let (_tx, rx) = tokio::sync::watch::channel(false);
 
-        let task = tokio::spawn(async move { show_startup_progress("%1", "codex", &tmux, rx).await });
+        let task =
+            tokio::spawn(async move { show_startup_progress("%1", "codex", &tmux, rx).await });
         tokio::time::advance(tokio::time::Duration::from_secs(61)).await;
 
         let result = task.await.unwrap();

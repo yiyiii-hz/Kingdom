@@ -82,7 +82,11 @@ fn build_clean_plan(
     let archive_cutoff = now - chrono::Duration::days(90);
     let action_cutoff = now - chrono::Duration::days(30);
 
-    for job in session.jobs.values().filter(|job| job.status == JobStatus::Completed) {
+    for job in session
+        .jobs
+        .values()
+        .filter(|job| job.status == JobStatus::Completed)
+    {
         let mut deletable = Vec::new();
         let files = storage.list_checkpoint_files(&job.id)?;
         let last = files.last().cloned();
@@ -96,7 +100,10 @@ fn build_clean_plan(
             }
         }
         if !deletable.is_empty() {
-            let bytes = deletable.iter().map(|(path, _)| file_size(path)).sum::<u64>();
+            let bytes = deletable
+                .iter()
+                .map(|(path, _)| file_size(path))
+                .sum::<u64>();
             plan.total_bytes += bytes;
             plan.checkpoint_jobs.push(CheckpointCleanup {
                 job_id: job.id.clone(),
@@ -107,7 +114,11 @@ fn build_clean_plan(
                     .map(|(_, created_at)| *created_at)
                     .min()
                     .unwrap_or(now),
-                cutoff: if all { now + chrono::Duration::days(3650) } else { checkpoint_cutoff },
+                cutoff: if all {
+                    now + chrono::Duration::days(3650)
+                } else {
+                    checkpoint_cutoff
+                },
             });
         }
 
@@ -128,7 +139,13 @@ fn build_clean_plan(
     let entries = storage.read_action_log(None)?;
     let old_entries = entries
         .iter()
-        .filter(|entry| if all { true } else { entry.timestamp < action_cutoff })
+        .filter(|entry| {
+            if all {
+                true
+            } else {
+                entry.timestamp < action_cutoff
+            }
+        })
         .collect::<Vec<_>>();
     if let (Some(first), Some(last)) = (old_entries.first(), old_entries.last()) {
         let bytes = file_size(&storage.root.join("logs").join("action.jsonl"));

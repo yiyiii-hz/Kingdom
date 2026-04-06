@@ -34,7 +34,10 @@ impl WebhookNotifier {
     }
 
     fn is_subscribed(&self, event: &str) -> bool {
-        self.config.events.iter().any(|candidate| candidate == event)
+        self.config
+            .events
+            .iter()
+            .any(|candidate| candidate == event)
     }
 
     pub fn build_payload(notification: &ManagerNotification, workspace: &str) -> serde_json::Value {

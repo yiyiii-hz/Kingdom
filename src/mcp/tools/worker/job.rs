@@ -170,13 +170,19 @@ impl Tool for JobCompleteTool {
             .map_err(storage_error)?;
 
         {
-            let job = session.jobs.get_mut(&params.job_id).ok_or_else(|| McpError::JobNotFound(params.job_id.clone()))?;
+            let job = session
+                .jobs
+                .get_mut(&params.job_id)
+                .ok_or_else(|| McpError::JobNotFound(params.job_id.clone()))?;
             job.status = crate::types::JobStatus::Completed;
             job.updated_at = Utc::now();
             job.result = Some(result.clone());
         }
         {
-            let worker = session.workers.get_mut(&worker_id).ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
+            let worker = session
+                .workers
+                .get_mut(&worker_id)
+                .ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
             worker.status = WorkerStatus::Idle;
             worker.job_id = None;
         }
@@ -194,7 +200,10 @@ impl Tool for JobCompleteTool {
             .map(|job| job.id.clone())
             .collect::<Vec<_>>();
         for job_id in &unblocked {
-            let job = session.jobs.get_mut(job_id).ok_or_else(|| McpError::Internal(format!("job {job_id} disappeared")))?;
+            let job = session
+                .jobs
+                .get_mut(job_id)
+                .ok_or_else(|| McpError::Internal(format!("job {job_id} disappeared")))?;
             job.status = crate::types::JobStatus::Pending;
             job.updated_at = Utc::now();
         }
@@ -265,14 +274,20 @@ impl Tool for JobFailTool {
         ensure_worker_owns_job(&session, caller, &params.job_id)?;
         let worker_id = worker_id(caller)?;
         {
-            let job = session.jobs.get_mut(&params.job_id).ok_or_else(|| McpError::JobNotFound(params.job_id.clone()))?;
+            let job = session
+                .jobs
+                .get_mut(&params.job_id)
+                .ok_or_else(|| McpError::JobNotFound(params.job_id.clone()))?;
             job.status = crate::types::JobStatus::Failed;
             job.fail_count += 1;
             job.last_fail_at = Some(Utc::now());
             job.updated_at = Utc::now();
         }
         {
-            let worker = session.workers.get_mut(&worker_id).ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
+            let worker = session
+                .workers
+                .get_mut(&worker_id)
+                .ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
             worker.status = WorkerStatus::Idle;
             worker.job_id = None;
         }
@@ -323,12 +338,18 @@ impl Tool for JobCancelledTool {
         let current_job_id = caller_job_id(&session, caller)?;
         let worker_id = worker_id(caller)?;
         {
-            let job = session.jobs.get_mut(&current_job_id).ok_or_else(|| McpError::JobNotFound(current_job_id.clone()))?;
+            let job = session
+                .jobs
+                .get_mut(&current_job_id)
+                .ok_or_else(|| McpError::JobNotFound(current_job_id.clone()))?;
             job.status = crate::types::JobStatus::Cancelled;
             job.updated_at = Utc::now();
         }
         {
-            let worker = session.workers.get_mut(&worker_id).ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
+            let worker = session
+                .workers
+                .get_mut(&worker_id)
+                .ok_or_else(|| McpError::WorkerNotFound(worker_id.clone()))?;
             worker.status = WorkerStatus::Idle;
             worker.job_id = None;
         }

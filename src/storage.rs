@@ -193,8 +193,9 @@ impl Storage {
     /// 将 action log 中 cutoff 之前的条目压缩为摘要行，保留 cutoff 之后的条目。
     pub fn compress_action_log(&self, cutoff: DateTime<Utc>) -> Result<()> {
         let entries = self.read_action_log(None)?;
-        let (old_entries, new_entries): (Vec<_>, Vec<_>) =
-            entries.into_iter().partition(|entry| entry.timestamp < cutoff);
+        let (old_entries, new_entries): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .partition(|entry| entry.timestamp < cutoff);
         if old_entries.is_empty() {
             return Ok(());
         }
@@ -231,11 +232,7 @@ impl Storage {
                     .unwrap_or(0);
             }
         }
-        let tokens = compressed_tokens
-            + max_tokens_by_worker
-                .values()
-                .copied()
-                .sum::<u64>();
+        let tokens = compressed_tokens + max_tokens_by_worker.values().copied().sum::<u64>();
 
         let compressed_entry = ActionLogEntry {
             timestamp: cutoff,
@@ -400,6 +397,7 @@ mod tests {
     fn sample_session() -> Session {
         let worker = Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Idle,
@@ -720,7 +718,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(deleted, 1);
-        assert!(!storage.root.join("jobs/job_001/checkpoints/ckpt_1.json").exists());
-        assert!(storage.root.join("jobs/job_001/checkpoints/ckpt_2.json").exists());
+        assert!(!storage
+            .root
+            .join("jobs/job_001/checkpoints/ckpt_1.json")
+            .exists());
+        assert!(storage
+            .root
+            .join("jobs/job_001/checkpoints/ckpt_2.json")
+            .exists());
     }
 }

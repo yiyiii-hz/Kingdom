@@ -1,6 +1,6 @@
 use crate::config::{workspace_hash, HealthConfig, KingdomConfig};
 use crate::storage::Storage;
-use crate::types::{Session, Worker, WorkerRole};
+use crate::types::{Session, Worker, WorkerRole, WorkerStatus};
 use chrono::{DateTime, Utc};
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -101,7 +101,11 @@ fn render_doctor_report(workspace: &Path, storage: &Storage) -> String {
         output,
         "{} KINGDOM.md              {}",
         if kingdom_md.exists() { "✓" } else { "✗" },
-        if kingdom_md.exists() { "存在" } else { "缺失" }
+        if kingdom_md.exists() {
+            "存在"
+        } else {
+            "缺失"
+        }
     );
 
     if let Some(info) = daemon {
@@ -128,6 +132,7 @@ fn dependency_lines() -> Vec<String> {
         versioned_binary_line("tmux", &["-V"], "→ brew install tmux"),
         versioned_binary_line("git", &["--version"], "→ brew install git"),
         bridge_line,
+        bridge_binary_line(),
         binary_line("codex", "→ npm install -g @openai/codex"),
         binary_line(
             "claude",
@@ -138,6 +143,16 @@ fn dependency_lines() -> Vec<String> {
             "→ 参考 https://ai.google.dev/gemini-api/docs/quickstart",
         ),
     ]
+}
+
+fn bridge_binary_line() -> String {
+    match std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|dir| dir.join("kingdom-bridge")))
+    {
+        Some(path) if path.exists() => "✓ kingdom-bridge  已安装".to_string(),
+        _ => "✗ kingdom-bridge  未安装  → 与 kingdom 放在同一目录".to_string(),
+    }
 }
 
 fn api_key_lines() -> Vec<String> {
@@ -172,12 +187,24 @@ fn session_lines(session: &Session, health: &HealthConfig, now: DateTime<Utc>) -
                 "{} manager    {}   {}  context {}",
                 if manager.mcp_connected { "✓" } else { "⚠" },
                 capitalize(&manager.provider),
-                if manager.mcp_connected { "已连接" } else { "未连接" },
+                if manager.mcp_connected {
+                    "已连接"
+                } else {
+                    "未连接"
+                },
                 manager
                     .context_usage_pct
                     .map(|pct| format!("{}%", (pct * 100.0).round() as u32))
                     .unwrap_or_else(|| "--".to_string())
             ));
+            if !manager.mcp_connected
+                && matches!(
+                    manager.status,
+                    WorkerStatus::Starting | WorkerStatus::Failed
+                )
+            {
+                lines.push("  → 检查 kingdom-bridge 是否安装：kingdom doctor".to_string());
+            }
         }
     }
 
@@ -202,7 +229,11 @@ fn session_lines(session: &Session, health: &HealthConfig, now: DateTime<Utc>) -
                 if worker.mcp_connected { "✓" } else { "⚠" },
                 worker.id,
                 capitalize(&worker.provider),
-                if worker.mcp_connected { "已连接" } else { "未连接" }
+                if worker.mcp_connected {
+                    "已连接"
+                } else {
+                    "未连接"
+                }
             ));
         }
     }
@@ -219,7 +250,11 @@ struct DaemonInfo {
 
 fn daemon_status(workspace: &Path, storage_root: &Path) -> Option<DaemonInfo> {
     let pid_path = storage_root.join("daemon.pid");
-    let pid = std::fs::read_to_string(&pid_path).ok()?.trim().parse::<u32>().ok()?;
+    let pid = std::fs::read_to_string(&pid_path)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
     if !process_alive(pid) {
         return None;
     }
@@ -298,7 +333,9 @@ fn heartbeat_elapsed_seconds(
 ) -> Option<i64> {
     let threshold =
         health.heartbeat_interval_seconds as i64 * i64::from(health.heartbeat_timeout_count);
-    let elapsed = now.signed_duration_since(worker.last_heartbeat?).num_seconds();
+    let elapsed = now
+        .signed_duration_since(worker.last_heartbeat?)
+        .num_seconds();
     (elapsed > threshold).then_some(elapsed)
 }
 
@@ -341,6 +378,7 @@ mod tests {
     fn test_doctor_heartbeat_threshold() {
         let worker = Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status: WorkerStatus::Running,

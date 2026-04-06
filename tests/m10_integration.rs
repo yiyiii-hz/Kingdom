@@ -52,17 +52,23 @@ impl IntegrationFixture {
         config.failover.connect_timeout_seconds = 5;
         config.health.heartbeat_interval_seconds = 1;
         config.health.process_check_interval_seconds = 1;
-        config
-            .providers
-            .overrides
-            .insert("codex".to_string(), bin_dir.join("mock-codex").display().to_string());
+        config.providers.overrides.insert(
+            "codex".to_string(),
+            bin_dir.join("mock-codex").display().to_string(),
+        );
         config.providers.overrides.insert(
             "mock-worker".to_string(),
             bin_dir.join("mock-worker").display().to_string(),
         );
         // Exclude real AI CLIs from PATH lookup so tests only see mock-codex.
-        config.providers.overrides.insert("claude".to_string(), "/nonexistent/claude".to_string());
-        config.providers.overrides.insert("gemini".to_string(), "/nonexistent/gemini".to_string());
+        config
+            .providers
+            .overrides
+            .insert("claude".to_string(), "/nonexistent/claude".to_string());
+        config
+            .providers
+            .overrides
+            .insert("gemini".to_string(), "/nonexistent/gemini".to_string());
         fs::write(
             storage.root.join("config.toml"),
             toml::to_string(&config).unwrap(),
@@ -123,41 +129,43 @@ fn write_mock_tmux(bin_dir: &Path, root: &Path) {
 fn init_git_repo(workspace: &Path) {
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/lib.rs"), "pub fn seed() -> i32 { 1 }\n").unwrap();
-    assert!(
-        Command::new("git")
-            .args(["init", workspace.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        Command::new("git")
-            .args(["-C", workspace.to_str().unwrap(), "config", "user.email", "test@example.com"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        Command::new("git")
-            .args(["-C", workspace.to_str().unwrap(), "config", "user.name", "Kingdom Tests"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        Command::new("git")
-            .args(["-C", workspace.to_str().unwrap(), "add", "."])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        Command::new("git")
-            .args(["-C", workspace.to_str().unwrap(), "commit", "-m", "init"])
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(Command::new("git")
+        .args(["init", workspace.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            workspace.to_str().unwrap(),
+            "config",
+            "user.email",
+            "test@example.com"
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            workspace.to_str().unwrap(),
+            "config",
+            "user.name",
+            "Kingdom Tests"
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["-C", workspace.to_str().unwrap(), "add", "."])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["-C", workspace.to_str().unwrap(), "commit", "-m", "init"])
+        .status()
+        .unwrap()
+        .success());
 }
 
 fn wait_for_manager_connected(storage: &Storage) {
@@ -166,7 +174,9 @@ fn wait_for_manager_connected(storage: &Storage) {
             .load_session()
             .unwrap()
             .and_then(|session| session.workers.get("w0").cloned())
-            .map(|worker| worker.mcp_connected && worker.pid.is_some() && !worker.pane_id.is_empty())
+            .map(|worker| {
+                worker.mcp_connected && worker.pid.is_some() && !worker.pane_id.is_empty()
+            })
             .unwrap_or(false)
     }));
 }
@@ -306,7 +316,10 @@ fn scenario5_session_recovery() {
     assert!(output.status.success(), "{output:?}");
 
     let session_after_down = fixture.storage.load_session().unwrap().unwrap();
-    assert_eq!(session_after_down.jobs["job_001"].status, JobStatus::Running);
+    assert_eq!(
+        session_after_down.jobs["job_001"].status,
+        JobStatus::Running
+    );
 
     write_mock_script(
         &fixture.storage.root,
@@ -484,9 +497,11 @@ fn scenario3_job_dependency_chain() {
     assert!(output.status.success(), "{output:?}");
     wait_for_manager_connected(&cancel_fixture.storage);
     assert!(wait_until(Duration::from_secs(5), || {
-        read_action_log(&cancel_fixture.storage).iter().any(|entry| {
-            entry["action"] == "job.cancel" && entry["params"]["warning"] == "cancel_cascade"
-        })
+        read_action_log(&cancel_fixture.storage)
+            .iter()
+            .any(|entry| {
+                entry["action"] == "job.cancel" && entry["params"]["warning"] == "cancel_cascade"
+            })
     }));
 
     let log = read_action_log(&cancel_fixture.storage);

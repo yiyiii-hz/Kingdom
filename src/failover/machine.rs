@@ -574,18 +574,13 @@ impl FailoverMachine {
         }
         let _ = self.storage.save_session(&session);
 
-        let worker_index = session
-            .workers
-            .keys()
-            .position(|id| id == worker_id)
-            .unwrap_or(session.workers.len());
         let launch = self
             .launcher
             .launch(
                 new_provider,
                 worker.role.clone(),
                 worker_id,
-                worker_index,
+                worker.index,
                 &self.storage.root,
             )
             .await;
@@ -824,6 +819,7 @@ mod tests {
     fn sample_worker(status: WorkerStatus) -> Worker {
         Worker {
             id: "w1".to_string(),
+            index: 1,
             provider: "codex".to_string(),
             role: WorkerRole::Worker,
             status,
@@ -882,6 +878,7 @@ mod tests {
                     "wm".to_string(),
                     Worker {
                         id: "wm".to_string(),
+                        index: 0,
                         provider: "claude".to_string(),
                         role: WorkerRole::Manager,
                         status: WorkerStatus::Idle,

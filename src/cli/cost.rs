@@ -59,8 +59,17 @@ fn build_cost_report(
 
     for entry in entries {
         if entry.action == "worker.create" {
-            if let Some(worker_id) = entry.result.as_ref().and_then(|v| v.get("worker_id")).and_then(|v| v.as_str()) {
-                if let Some(provider) = entry.params.get("provider").and_then(|value| value.as_str()) {
+            if let Some(worker_id) = entry
+                .result
+                .as_ref()
+                .and_then(|v| v.get("worker_id"))
+                .and_then(|v| v.as_str())
+            {
+                if let Some(provider) = entry
+                    .params
+                    .get("provider")
+                    .and_then(|value| value.as_str())
+                {
                     provider_by_worker.insert(worker_id.to_string(), provider.to_string());
                 }
             }
@@ -77,8 +86,13 @@ fn build_cost_report(
         match entry.action.as_str() {
             "context.ping" => {
                 let worker_id = entry.actor.clone();
-                let token_count = entry.params.get("token_count").and_then(|value| value.as_u64()).unwrap_or(0);
-                let delta = token_count.saturating_sub(last_token_by_worker.get(&worker_id).copied().unwrap_or(0));
+                let token_count = entry
+                    .params
+                    .get("token_count")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let delta = token_count
+                    .saturating_sub(last_token_by_worker.get(&worker_id).copied().unwrap_or(0));
                 last_token_by_worker.insert(worker_id.clone(), token_count);
                 if delta == 0 {
                     continue;
@@ -91,7 +105,9 @@ fn build_cost_report(
                 let delta_cost = price_for_provider(cost, &provider, delta);
                 let local_ts = entry.timestamp.with_timezone(&Local);
                 if same_day(local_ts, local_now) {
-                    let provider_entry = today_by_provider.entry(provider.clone()).or_insert((0, 0.0));
+                    let provider_entry = today_by_provider
+                        .entry(provider.clone())
+                        .or_insert((0, 0.0));
                     provider_entry.0 += delta;
                     provider_entry.1 += delta_cost;
                     report.today_total += delta_cost;
@@ -107,7 +123,11 @@ fn build_cost_report(
                 }
             }
             "compressed_summary" => {
-                let tokens = entry.params.get("tokens").and_then(|value| value.as_u64()).unwrap_or(0);
+                let tokens = entry
+                    .params
+                    .get("tokens")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
                 if tokens == 0 {
                     continue;
                 }
@@ -143,7 +163,10 @@ fn build_cost_report(
         .into_iter()
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(job_id, cost)| JobCost {
-            intent: job_intents.get(&job_id).cloned().unwrap_or_else(|| "-".to_string()),
+            intent: job_intents
+                .get(&job_id)
+                .cloned()
+                .unwrap_or_else(|| "-".to_string()),
             job_id,
             cost,
         });
@@ -158,7 +181,11 @@ fn render_cost_report(report: &CostReport) -> String {
 
     let mut output = String::new();
     let _ = writeln!(output, "今日花费：${:.2}", report.today_total);
-    let total = report.providers.iter().map(|item| item.today_cost).sum::<f64>();
+    let total = report
+        .providers
+        .iter()
+        .map(|item| item.today_cost)
+        .sum::<f64>();
     for provider in &report.providers {
         let _ = writeln!(
             output,
@@ -169,7 +196,11 @@ fn render_cost_report(report: &CostReport) -> String {
             progress_bar(provider.today_cost, total)
         );
     }
-    let _ = writeln!(output, "\n本周：${:.2}  本月：${:.2}", report.week_total, report.month_total);
+    let _ = writeln!(
+        output,
+        "\n本周：${:.2}  本月：${:.2}",
+        report.week_total, report.month_total
+    );
     if let Some(job) = &report.most_expensive_job {
         let _ = writeln!(
             output,
@@ -230,6 +261,7 @@ mod tests {
                 "w1".to_string(),
                 Worker {
                     id: "w1".to_string(),
+                    index: 1,
                     provider: "codex".to_string(),
                     role: WorkerRole::Worker,
                     status: WorkerStatus::Running,
