@@ -48,17 +48,27 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     let providers = crate::process::discovery::ProviderDiscovery::detect(&config);
     println!("\nAvailable providers:");
     for p in &providers {
-        let key_status = if p.api_key_set {
-            "API key set"
+        let auth_status = if p.api_key_set {
+            "authenticated"
         } else {
-            "no API key"
+            "installed (no env key — using CLI auth)"
         };
-        println!("  {} ({}) at {}", p.name, key_status, p.binary.display());
+        println!("  {} ({}) at {}", p.name, auth_status, p.binary.display());
     }
 
-    let available: Vec<_> = providers.iter().filter(|p| p.api_key_set).collect();
+    // Prefer providers with an env API key; fall back to all installed if none have one
+    // (supports CLI-authenticated providers that don't need env vars).
+    let keyed: Vec<_> = providers.iter().filter(|p| p.api_key_set).collect();
+    let available: Vec<_> = if keyed.is_empty() {
+        providers.iter().collect()
+    } else {
+        keyed
+    };
     if available.is_empty() {
-        return Err("No providers available (check API key environment variables).".into());
+        return Err(
+            "No AI providers found. Install claude, codex, or gemini and ensure they are on PATH."
+                .into(),
+        );
     }
 
     if !workspace.join("KINGDOM.md").exists() {

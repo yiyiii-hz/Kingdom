@@ -25,7 +25,11 @@ impl ProviderDiscovery {
                 Some(DetectedProvider {
                     name: name.to_string(),
                     binary,
-                    api_key_set: std::env::var(key_env).is_ok(),
+                    // Informational only — provider is usable if binary is installed,
+                    // regardless of whether an env key is set (CLI auth is also valid).
+                    api_key_set: std::env::var(key_env)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false),
                 })
             })
             .collect()
@@ -33,10 +37,10 @@ impl ProviderDiscovery {
 
     pub fn check(provider: &str, config: &KingdomConfig) -> Option<PathBuf> {
         if let Some(override_path) = config.providers.overrides.get(provider) {
+            // Override is explicit: honour it strictly.
+            // A non-existent override path means the provider is intentionally excluded.
             let p = PathBuf::from(override_path);
-            if p.exists() {
-                return Some(p);
-            }
+            return p.exists().then_some(p);
         }
         Self::which(provider)
     }
@@ -45,7 +49,7 @@ impl ProviderDiscovery {
         KNOWN_PROVIDERS
             .iter()
             .find(|(name, _)| *name == provider)
-            .map(|(_, env)| std::env::var(env).is_ok())
+            .map(|(_, env)| std::env::var(env).map(|v| !v.is_empty()).unwrap_or(false))
             .unwrap_or(false)
     }
 

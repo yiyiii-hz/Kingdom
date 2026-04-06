@@ -188,9 +188,14 @@ fn kingdom_up_fails_when_no_manager_provider_available() {
         .unwrap();
 
     let storage = Storage::init(&workspace).unwrap();
+    // Point all known providers to a non-existent path so detect() finds none.
+    let mut config = KingdomConfig::default_config();
+    config.providers.overrides.insert("claude".to_string(), "/nonexistent/claude".to_string());
+    config.providers.overrides.insert("codex".to_string(), "/nonexistent/codex".to_string());
+    config.providers.overrides.insert("gemini".to_string(), "/nonexistent/gemini".to_string());
     fs::write(
         storage.root.join("config.toml"),
-        toml::to_string(&KingdomConfig::default_config()).unwrap(),
+        toml::to_string(&config).unwrap(),
     )
     .unwrap();
 
@@ -204,7 +209,7 @@ fn kingdom_up_fails_when_no_manager_provider_available() {
     assert!(!output.status.success());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("No providers available"));
+    assert!(stderr.contains("No AI providers found"), "stderr: {stderr}");
 }
 
 #[test]

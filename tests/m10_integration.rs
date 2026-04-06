@@ -60,6 +60,9 @@ impl IntegrationFixture {
             "mock-worker".to_string(),
             bin_dir.join("mock-worker").display().to_string(),
         );
+        // Exclude real AI CLIs from PATH lookup so tests only see mock-codex.
+        config.providers.overrides.insert("claude".to_string(), "/nonexistent/claude".to_string());
+        config.providers.overrides.insert("gemini".to_string(), "/nonexistent/gemini".to_string());
         fs::write(
             storage.root.join("config.toml"),
             toml::to_string(&config).unwrap(),

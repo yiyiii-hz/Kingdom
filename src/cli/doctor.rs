@@ -130,16 +130,27 @@ fn dependency_lines() -> Vec<String> {
 }
 
 fn api_key_lines() -> Vec<String> {
-    let mut lines = vec![env_line("ANTHROPIC_API_KEY"), env_line("OPENAI_API_KEY")];
-    if env_is_set("GOOGLE_API_KEY") || env_is_set("GEMINI_API_KEY") {
-        lines.push("✓ GOOGLE_API_KEY / GEMINI_API_KEY    已设置".to_string());
+    // API keys are optional when the CLI tool manages its own auth (e.g. `claude login`).
+    // Show ✓ when env var is set, ⚠ when missing (informational only — not a blocker).
+    vec![
+        env_key_line("ANTHROPIC_API_KEY", "claude"),
+        env_key_line("OPENAI_API_KEY", "codex"),
+        {
+            if env_is_set("GOOGLE_API_KEY") || env_is_set("GEMINI_API_KEY") {
+                "✓ GOOGLE_API_KEY / GEMINI_API_KEY    已设置".to_string()
+            } else {
+                "⚠ GOOGLE_API_KEY / GEMINI_API_KEY    未设置（gemini CLI 登录态可替代）".to_string()
+            }
+        },
+    ]
+}
+
+fn env_key_line(var: &str, cli: &str) -> String {
+    if env_is_set(var) {
+        format!("✓ {var}    已设置")
     } else {
-        lines.push(format!(
-            "✗ GOOGLE_API_KEY / GEMINI_API_KEY    未设置  {}",
-            export_fix("GOOGLE_API_KEY")
-        ));
+        format!("⚠ {var}    未设置（{cli} CLI 登录态可替代）")
     }
-    lines
 }
 
 fn session_lines(session: &Session, health: &HealthConfig, now: DateTime<Utc>) -> Vec<String> {
@@ -265,20 +276,8 @@ fn command_output(binary: &str, args: &[&str]) -> Option<String> {
         })
 }
 
-fn env_line(var: &str) -> String {
-    if env_is_set(var) {
-        format!("✓ {var}    已设置")
-    } else {
-        format!("✗ {var}    未设置  {}", export_fix(var))
-    }
-}
-
 fn env_is_set(var: &str) -> bool {
     std::env::var_os(var).is_some_and(|value| !value.is_empty())
-}
-
-fn export_fix(var: &str) -> String {
-    format!("→ export {var}=<your-key>")
 }
 
 fn heartbeat_elapsed_seconds(
@@ -317,11 +316,14 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn test_doctor_export_syntax() {
-        let fix = export_fix("OPENAI_API_KEY");
-        assert!(fix.contains("export OPENAI_API_KEY=<your-key>"));
-        assert!(!fix.contains("set "));
-        assert!(!fix.contains("$env:"));
+    fn test_doctor_api_key_line_format() {
+        // When env var is not set, line should mention CLI auth alternative and not use
+        // shell-specific syntax like "set" or "$env:".
+        let line = env_key_line("OPENAI_API_KEY", "codex");
+        assert!(line.contains("OPENAI_API_KEY"));
+        assert!(line.contains("codex"));
+        assert!(!line.contains("set "));
+        assert!(!line.contains("$env:"));
     }
 
     #[test]
