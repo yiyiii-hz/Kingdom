@@ -19,7 +19,7 @@ impl RateLimitHandler {
     pub fn handle(&mut self, worker_id: &str) -> RateLimitResult {
         let count = self.retry_counts.entry(worker_id.to_string()).or_insert(0);
         *count += 1;
-        if *count > 3 {
+        if *count >= 3 {
             self.retry_counts.remove(worker_id);
             return RateLimitResult::Exhausted;
         }
@@ -27,7 +27,6 @@ impl RateLimitHandler {
         let wait_secs = match *count {
             1 => 5,
             2 => 15,
-            3 => 30,
             _ => 60,
         };
         RateLimitResult::Retrying { wait_secs }
@@ -53,10 +52,6 @@ mod tests {
             h.handle("w1"),
             RateLimitResult::Retrying { wait_secs: 15 }
         ));
-        assert!(matches!(
-            h.handle("w1"),
-            RateLimitResult::Retrying { wait_secs: 30 }
-        ));
         assert!(matches!(h.handle("w1"), RateLimitResult::Exhausted));
     }
 
@@ -70,5 +65,19 @@ mod tests {
             h.handle("w1"),
             RateLimitResult::Retrying { wait_secs: 5 }
         ));
+    }
+
+    #[test]
+    fn exhausts_after_three_attempts() {
+        let mut h = RateLimitHandler::new();
+        assert!(matches!(
+            h.handle("w1"),
+            RateLimitResult::Retrying { wait_secs: 5 }
+        ));
+        assert!(matches!(
+            h.handle("w1"),
+            RateLimitResult::Retrying { wait_secs: 15 }
+        ));
+        assert!(matches!(h.handle("w1"), RateLimitResult::Exhausted));
     }
 }
