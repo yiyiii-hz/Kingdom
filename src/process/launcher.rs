@@ -189,3 +189,125 @@ impl ProcessLauncher {
         .to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::KingdomConfig;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn write_executable(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    fn with_fake_tmux<F>(test: F)
+    where
+        F: FnOnce(&Path),
+    {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let log_path = tmp.path().join("tmux.log");
+        let tmux_path = bin_dir.join("tmux");
+        write_executable(
+            &tmux_path,
+            &format!(
+                "#!/bin/sh\n\
+                echo \"$@\" >> \"{}\"\n\
+                case \"$1\" in\n\
+                  split-window) echo %1 ;;\n\
+                  new-window) echo %4 ;;\n\
+                  display-message) echo 4242 ;;\n\
+                  send-keys) exit 0 ;;\n\
+                  *) exit 0 ;;\n\
+                esac\n",
+                log_path.display()
+            ),
+        );
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), old_path));
+        test(tmp.path());
+        std::env::set_var("PATH", old_path);
+    }
+
+    #[test]
+    fn launch_returns_pid_and_pane_id() {
+        with_fake_tmux(|tmp| {
+            let workspace = tmp.join("workspace");
+            fs::create_dir_all(&workspace).unwrap();
+            let storage_root = tmp.join("storage");
+            fs::create_dir_all(&storage_root).unwrap();
+            let provider = tmp.join("codex");
+            write_executable(&provider, "#!/bin/sh\nexit 0\n");
+
+            let mut config = KingdomConfig::default_config();
+            config
+                .providers
+                .overrides
+                .insert("codex".to_string(), provider.display().to_string());
+            let launcher = ProcessLauncher::new(workspace, config, "hash123".to_string());
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(launcher.launch(
+                "codex",
+                WorkerRole::Worker,
+                "w1",
+                1,
+                &storage_root,
+            ));
+            let result = result.unwrap();
+
+            assert_eq!(result.pid, 4242);
+            assert_eq!(result.pane_id, "%1");
+            let mcp = fs::read_to_string(storage_root.join("mcp/w1.json")).unwrap();
+            assert!(mcp.contains("KINGDOM_WORKER_ID"));
+            assert!(mcp.contains("w1"));
+        });
+    }
+
+    #[test]
+    fn fourth_worker_launch_uses_new_tmux_window() {
+        with_fake_tmux(|tmp| {
+            let workspace = tmp.join("workspace");
+            fs::create_dir_all(&workspace).unwrap();
+            let storage_root = tmp.join("storage");
+            fs::create_dir_all(&storage_root).unwrap();
+            let provider = tmp.join("codex");
+            write_executable(&provider, "#!/bin/sh\nexit 0\n");
+
+            let mut config = KingdomConfig::default_config();
+            config
+                .providers
+                .overrides
+                .insert("codex".to_string(), provider.display().to_string());
+            let launcher = ProcessLauncher::new(workspace, config, "hash123".to_string());
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(launcher.launch(
+                "codex",
+                WorkerRole::Worker,
+                "w4",
+                3,
+                &storage_root,
+            ));
+            let result = result.unwrap();
+
+            assert_eq!(result.pane_id, "%4");
+            let log = fs::read_to_string(tmp.join("tmux.log")).unwrap();
+            assert!(log.contains("new-window"));
+            assert!(log.contains("kingdom:w4"));
+        });
+    }
+}

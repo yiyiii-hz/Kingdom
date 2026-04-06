@@ -4,7 +4,7 @@ use crate::storage::Storage;
 use crate::types::{Session, WorkerStatus};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 pub fn find_idle_workers(
     session: &Session,
@@ -58,20 +58,23 @@ pub async fn run_once(
 pub async fn idle_monitor(
     session: Arc<Mutex<Session>>,
     launcher: Arc<ProcessLauncher>,
-    config: crate::config::KingdomConfig,
+    config: Arc<RwLock<crate::config::KingdomConfig>>,
     storage: Arc<Storage>,
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        run_once(&session, &launcher, &config.idle, &storage).await;
+        let idle_config = { config.read().await.idle.clone() };
+        run_once(&session, &launcher, &idle_config, &storage).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KingdomConfig;
     use crate::config::IdleConfig;
     use crate::types::{GitStrategy, NotificationMode, Session, Worker, WorkerRole, WorkerStatus};
+    use std::path::PathBuf;
     use std::collections::HashMap;
 
     fn idle_worker(id: &str, pid: u32, idle_since_minutes: i64) -> Worker {
@@ -144,5 +147,31 @@ mod tests {
         let session = make_session(vec![w]);
         let result = find_idle_workers(&session, &config, Utc::now());
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_once_terminates_idle_process_and_updates_status() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let worker = idle_worker("w1", pid, 60);
+        let session = Mutex::new(make_session(vec![worker]));
+        let launcher = ProcessLauncher::new(
+            PathBuf::from("/tmp"),
+            KingdomConfig::default_config(),
+            "hash".to_string(),
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        {
+            let snapshot = session.lock().await.clone();
+            storage.save_session(&snapshot).unwrap();
+        }
+
+        run_once(&session, &launcher, &IdleConfig { timeout_minutes: 5 }, &storage).await;
+
+        let saved = storage.load_session().unwrap().unwrap();
+        assert_eq!(saved.workers["w1"].status, WorkerStatus::Terminated);
+        let status = child.wait().unwrap();
+        assert!(!status.success());
     }
 }

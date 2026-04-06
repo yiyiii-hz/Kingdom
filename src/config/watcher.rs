@@ -67,4 +67,32 @@ timeout_minutes = 10
         let result = reload_if_changed(&path, &cfg, mtime).await;
         assert!(result.is_none());
     }
+
+    #[tokio::test]
+    async fn config_watcher_reloads_within_five_seconds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "[idle]\ntimeout_minutes = 20\n").unwrap();
+
+        let cfg = Arc::new(RwLock::new(KingdomConfig::default_config()));
+        let watcher_cfg = Arc::clone(&cfg);
+        let watcher_path = path.clone();
+        let task = tokio::spawn(async move {
+            config_watcher(watcher_path, watcher_cfg).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        std::fs::write(&path, "[idle]\ntimeout_minutes = 7\n").unwrap();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            if cfg.read().await.idle.timeout_minutes == 7 {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        task.abort();
+    }
 }

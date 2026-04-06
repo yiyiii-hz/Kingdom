@@ -79,3 +79,31 @@ fn terminate_by_pid_file(
     let _ = std::fs::remove_file(pid_file);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminate_by_pid_file_removes_file_for_missing_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("daemon.pid");
+        std::fs::write(&pid_file, "999999\n").unwrap();
+
+        terminate_by_pid_file(&pid_file, true).unwrap();
+        assert!(!pid_file.exists());
+    }
+
+    #[test]
+    fn terminate_by_pid_file_kills_real_process() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("daemon.pid");
+        std::fs::write(&pid_file, format!("{}\n", child.id())).unwrap();
+
+        terminate_by_pid_file(&pid_file, false).unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        assert!(!pid_file.exists());
+    }
+}

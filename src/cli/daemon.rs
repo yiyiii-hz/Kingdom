@@ -55,7 +55,7 @@ pub async fn run_daemon(workspace: PathBuf) -> Result<(), Box<dyn std::error::Er
         tokio::spawn(crate::process::idle_monitor::idle_monitor(
             session,
             idle_launcher,
-            config,
+            Arc::clone(&config_arc),
             idle_storage,
         ));
     }

@@ -379,8 +379,25 @@ mod tests {
     use super::*;
     use crate::mcp::dispatcher::Tool;
     use crate::mcp::tools::manager::testsupport::{setup, ts, worker};
+    use crate::process::launcher::ProcessLauncher;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
     use crate::types::{Job, JobStatus, Permission, WorkerStatus};
     use serde_json::json;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn write_executable(path: &std::path::Path, content: &str) {
+        fs::write(path, content).unwrap();
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
 
     fn pending_job(job_id: &str) -> Job {
         Job {
@@ -513,5 +530,76 @@ mod tests {
             .unwrap();
         let session = storage.load_session().unwrap().unwrap();
         assert!(session.workers["w1"].permissions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn worker_create_launches_process_and_records_pid() {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let tmux_log = tmp.path().join("tmux.log");
+        write_executable(
+            &bin_dir.join("tmux"),
+            &format!(
+                "#!/bin/sh\n\
+                 echo \"$@\" >> \"{}\"\n\
+                 case \"$1\" in\n\
+                   split-window) echo %7 ;;\n\
+                   new-window) echo %9 ;;\n\
+                   display-message) echo 7777 ;;\n\
+                   send-keys) exit 0 ;;\n\
+                   *) exit 0 ;;\n\
+                 esac\n",
+                tmux_log.display()
+            ),
+        );
+        let provider = bin_dir.join("codex");
+        write_executable(&provider, "#!/bin/sh\nexit 0\n");
+
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), old_path));
+
+        let storage = Arc::new(Storage::init(tmp.path()).unwrap());
+        let session = crate::mcp::tools::manager::testsupport::session_with_workspace(
+            tmp.path().to_str().unwrap(),
+        );
+        storage.save_session(&session).unwrap();
+
+        let mut config = crate::config::KingdomConfig::default_config();
+        config
+            .providers
+            .overrides
+            .insert("codex".to_string(), provider.display().to_string());
+        fs::write(
+            storage.root.join("config.toml"),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let launcher = Arc::new(ProcessLauncher::new(
+            tmp.path().to_path_buf(),
+            config,
+            "hash".to_string(),
+        ));
+        let tool = WorkerCreateTool::new(
+            Arc::clone(&storage),
+            Arc::new(RwLock::new(PushRegistry::new())),
+            Some(launcher),
+        );
+
+        let result = tool
+            .call(json!({"provider":"codex","role":"worker"}), &crate::mcp::tools::manager::testsupport::manager_caller())
+            .await
+            .unwrap();
+
+        let worker_id = result["worker_id"].as_str().unwrap();
+        let session = storage.load_session().unwrap().unwrap();
+        let worker = &session.workers[worker_id];
+        assert_eq!(worker.pid, Some(7777));
+        assert_eq!(worker.pane_id, "%7");
+        assert_eq!(worker.status, WorkerStatus::Starting);
+
+        std::env::set_var("PATH", old_path);
     }
 }

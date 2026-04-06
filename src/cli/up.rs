@@ -165,3 +165,36 @@ fn generate_kingdom_md(lang: &str) -> String {
 "#
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_language_prefers_rust() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        assert_eq!(detect_language(tmp.path()), "Rust");
+    }
+
+    #[test]
+    fn detect_language_falls_back_to_javascript_and_unknown() {
+        let js = tempfile::tempdir().unwrap();
+        std::fs::write(js.path().join("package.json"), "{}").unwrap();
+        assert_eq!(detect_language(js.path()), "TypeScript/JavaScript");
+
+        let unknown = tempfile::tempdir().unwrap();
+        assert_eq!(detect_language(unknown.path()), "（未检测到）");
+    }
+
+    #[test]
+    fn generate_kingdom_md_contains_expected_sections() {
+        let doc = generate_kingdom_md("Rust");
+        assert!(doc.contains("# Kingdom 工作约束"));
+        assert!(doc.contains("## 代码规范"));
+        assert!(doc.contains("语言：Rust"));
+        assert!(doc.contains("## 架构约束"));
+        assert!(doc.contains("## 风格偏好"));
+    }
+}
