@@ -42,11 +42,7 @@ Kingdom keeps work running when providers fail. When Codex hits a context limit 
 git clone https://github.com/your-org/kingdom-v2
 cd kingdom-v2
 cargo build --release
-cargo build --release -p kingdom-watchdog
-cargo build --release -p kingdom-bridge
-cp target/release/kingdom ~/.local/bin/
-cp target/release/kingdom-watchdog ~/.local/bin/
-cp target/release/kingdom-bridge ~/.local/bin/
+cp target/release/kingdom target/release/kingdom-watchdog target/release/kingdom-bridge ~/.local/bin/
 ```
 
 > **Important:** `kingdom`, `kingdom-watchdog`, and `kingdom-bridge` must be in the **same directory**. At runtime, `kingdom-watchdog` locates `kingdom` by looking in its own directory, and the `kingdom` daemon locates `kingdom-bridge` the same way. Placing them in different locations will cause startup errors.
