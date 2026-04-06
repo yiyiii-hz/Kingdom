@@ -47,6 +47,8 @@ cp target/release/kingdom ~/.local/bin/
 cp target/release/kingdom-watchdog ~/.local/bin/
 ```
 
+> **Important:** `kingdom` and `kingdom-watchdog` must be in the **same directory**. At runtime, `kingdom-watchdog` locates the `kingdom` binary by looking in its own directory. Placing them in different locations will cause a startup error.
+
 Verify:
 
 ```bash
