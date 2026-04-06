@@ -4,4 +4,5 @@ pub mod health;
 pub mod mcp;
 pub mod process;
 pub mod storage;
+pub mod test_support;
 pub mod types;

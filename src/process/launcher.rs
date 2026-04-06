@@ -194,15 +194,10 @@ impl ProcessLauncher {
 mod tests {
     use super::*;
     use crate::config::KingdomConfig;
+    use crate::test_support::{env_lock, PathGuard};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn write_executable(path: &Path, content: &str) {
         fs::write(path, content).unwrap();
@@ -215,7 +210,7 @@ mod tests {
     where
         F: FnOnce(&Path),
     {
-        let _guard = env_lock().lock().unwrap();
+        let _env_lock = env_lock();
         let tmp = tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -236,10 +231,8 @@ mod tests {
                 log_path.display()
             ),
         );
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), old_path));
+        let _path_guard = PathGuard::prepend(&bin_dir);
         test(tmp.path());
-        std::env::set_var("PATH", old_path);
     }
 
     #[test]

@@ -380,17 +380,12 @@ mod tests {
     use crate::mcp::dispatcher::Tool;
     use crate::mcp::tools::manager::testsupport::{setup, ts, worker};
     use crate::process::launcher::ProcessLauncher;
+    use crate::test_support::{env_lock, PathGuard};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
     use crate::types::{Job, JobStatus, Permission, WorkerStatus};
     use serde_json::json;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn write_executable(path: &std::path::Path, content: &str) {
         fs::write(path, content).unwrap();
@@ -534,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_create_launches_process_and_records_pid() {
-        let _guard = env_lock().lock().unwrap();
+        let _env_lock = env_lock();
         let tmp = tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -557,8 +552,7 @@ mod tests {
         let provider = bin_dir.join("codex");
         write_executable(&provider, "#!/bin/sh\nexit 0\n");
 
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", bin_dir.display(), old_path));
+        let _path_guard = PathGuard::prepend(&bin_dir);
 
         let storage = Arc::new(Storage::init(tmp.path()).unwrap());
         let session = crate::mcp::tools::manager::testsupport::session_with_workspace(
@@ -599,7 +593,5 @@ mod tests {
         assert_eq!(worker.pid, Some(7777));
         assert_eq!(worker.pane_id, "%7");
         assert_eq!(worker.status, WorkerStatus::Starting);
-
-        std::env::set_var("PATH", old_path);
     }
 }
