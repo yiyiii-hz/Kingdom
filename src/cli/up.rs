@@ -41,20 +41,8 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     let config = crate::config::KingdomConfig::load_or_default(&storage.root.join("config.toml"));
     let tmux = crate::tmux::TmuxController::new(config.tmux.session_name.clone());
     let pid_file = storage.root.join("daemon.pid");
-    if pid_file.exists() {
-        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                let alive =
-                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
-                if alive {
-                    println!(
-                        "Kingdom is already running. Use `tmux attach -t {}` to connect.",
-                        config.tmux.session_name
-                    );
-                    return Ok(());
-                }
-            }
-        }
+    if check_and_clear_stale_pid(&pid_file, &config.tmux.session_name).is_some() {
+        return Ok(());
     }
 
     let providers = crate::process::discovery::ProviderDiscovery::detect(&config);
@@ -95,7 +83,7 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
         .unwrap_or(false);
 
     let manager_provider = if resume_existing {
-        let mut session = existing_session.expect("resume_existing implies session");
+        let mut session = existing_session.ok_or("resume_existing set but session is None")?;
         mark_old_manager_stale(&tmux, &mut session);
         storage.save_session(&session)?;
         session
@@ -217,6 +205,27 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     }
     println!("  Attach with: tmux attach -t {session_name}");
     Ok(())
+}
+
+fn check_and_clear_stale_pid(pid_file: &Path, session_name: &str) -> Option<()> {
+    if pid_file.exists() {
+        if let Ok(pid_str) = std::fs::read_to_string(pid_file) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                let alive =
+                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
+                if alive {
+                    println!(
+                        "Kingdom is already running. Use `tmux attach -t {}` to connect.",
+                        session_name
+                    );
+                    return Some(());
+                }
+            }
+        }
+        println!("发现残留 daemon.pid（进程已退出），正在清理...");
+        let _ = std::fs::remove_file(pid_file);
+    }
+    None
 }
 
 fn has_unfinished_jobs(session: &crate::types::Session) -> bool {
@@ -426,6 +435,18 @@ mod tests {
         assert!(doc.contains("语言：Rust"));
         assert!(doc.contains("## 架构约束"));
         assert!(doc.contains("## 风格偏好"));
+    }
+
+    #[test]
+    fn test_up_clears_stale_pid_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("daemon.pid");
+        std::fs::write(&pid_file, "99999999\n").unwrap();
+
+        let result = check_and_clear_stale_pid(&pid_file, "kingdom");
+
+        assert!(result.is_none(), "stale pid must not be treated as running");
+        assert!(!pid_file.exists(), "stale daemon.pid should be removed");
     }
 
     #[tokio::test]

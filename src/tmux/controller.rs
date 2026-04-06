@@ -375,10 +375,7 @@ pub(crate) mod testsupport {
                 .push_back(response);
         }
 
-        #[allow(dead_code)]
-        pub fn set_exec_response(&self, response: std::io::Result<()>) {
-            *self.exec_response.lock().unwrap() = Some(response);
-        }
+
     }
 
     impl TmuxOps for MockTmux {

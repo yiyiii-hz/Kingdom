@@ -1,6 +1,6 @@
 use crate::types::{HealthEvent, ManagerNotification};
 use std::collections::HashMap;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 
 pub struct NotificationQueue {
     pub events: Vec<ManagerNotification>,
@@ -81,6 +81,3 @@ impl RequestAwaiterRegistry {
         }
     }
 }
-
-#[allow(dead_code)]
-fn _mutex_reference(_: &Mutex<NotificationQueue>) {}

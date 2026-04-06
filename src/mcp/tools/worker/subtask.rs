@@ -67,7 +67,8 @@ impl Tool for SubtaskCreateTool {
         let _ = &self.push;
         let params = parse_params::<SubtaskCreateParams>(params)?;
         let mut session = load_session(&self.storage)?;
-        let worker = session.workers.get(&worker_id(caller)?).unwrap();
+        let wid = worker_id(caller)?;
+        let worker = session.workers.get(&wid).ok_or_else(|| McpError::WorkerNotFound(wid.clone()))?;
         if !worker.permissions.contains(&Permission::SubtaskCreate) {
             return Err(McpError::Unauthorized {
                 tool: self.name().to_string(),
@@ -131,7 +132,8 @@ impl Tool for WorkerNotifyTool {
         let _ = &self.push;
         let params = parse_params::<WorkerNotifyParams>(params)?;
         let session = load_session(&self.storage)?;
-        let worker = session.workers.get(&worker_id(caller)?).unwrap();
+        let wid = worker_id(caller)?;
+        let worker = session.workers.get(&wid).ok_or_else(|| McpError::WorkerNotFound(wid.clone()))?;
         if !worker.permissions.contains(&Permission::WorkerNotify) {
             return Err(McpError::Unauthorized {
                 tool: self.name().to_string(),

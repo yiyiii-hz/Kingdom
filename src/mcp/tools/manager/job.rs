@@ -308,7 +308,7 @@ impl Tool for JobCancelTool {
             .is_some_and(|worker| worker.status == WorkerStatus::Running);
 
         if should_push {
-            let job_mut = session.jobs.get_mut(&job.id).unwrap();
+            let job_mut = session.jobs.get_mut(&job.id).ok_or_else(|| McpError::JobNotFound(job.id.clone()))?;
             job_mut.status = JobStatus::Cancelling;
             job_mut.updated_at = Utc::now();
             save_session(&self.storage, &session)?;

@@ -343,7 +343,7 @@ impl FailoverMachine {
             && worker.status == WorkerStatus::Running
             && worker.job_id.is_some()
         {
-            let job_id = worker.job_id.clone().unwrap();
+            let job_id = worker.job_id.clone().expect("is_some checked above");
             if matches!(
                 session.jobs.get(&job_id).map(|job| &job.status),
                 Some(JobStatus::Cancelling)
