@@ -1,5 +1,7 @@
 # Kingdom v2
 
+> Chinese version: [README.zh.md](./README.zh.md)
+
 Terminal-native AI worker orchestration. Multiple providers, one session, automatic failover.
 
 ```

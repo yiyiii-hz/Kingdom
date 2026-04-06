@@ -172,11 +172,12 @@ impl ProcessLauncher {
 
     fn build_mcp_config(&self, worker_id: &str, role: WorkerRole) -> String {
         let socket = format!("/tmp/kingdom/{}.sock", self.workspace_hash);
+        let storage_root = self.workspace_path.join(".kingdom");
         let role_str = match role {
             WorkerRole::Manager => "manager",
             WorkerRole::Worker => "worker",
         };
-        let (command, args) = bridge_command(&socket);
+        let (command, args) = bridge_command(&socket, &storage_root.to_string_lossy());
         serde_json::json!({
             "mcpServers": {
                 "kingdom": {
@@ -193,17 +194,37 @@ impl ProcessLauncher {
     }
 }
 
-/// Returns the (command, args) to bridge stdio to a Unix socket.
-/// Prefers `socat` (most reliable), falls back to `nc -U` (pre-installed on macOS/Linux).
-fn bridge_command(socket: &str) -> (String, Vec<String>) {
+/// Returns the (command, args) for the MCP bridge.
+///
+/// Prefers `kingdom-bridge` (same directory as the running kingdom binary) which
+/// properly handles the Kingdom custom protocol. Falls back to nc/socat for
+/// backward compatibility when kingdom-bridge is not yet installed.
+fn bridge_command(socket: &str, storage_root: &str) -> (String, Vec<String>) {
+    if let Some(bridge) = kingdom_bridge_path() {
+        if bridge.exists() {
+            return (
+                bridge.to_string_lossy().into_owned(),
+                vec![socket.to_string(), storage_root.to_string()],
+            );
+        }
+    }
+    // Fallback: raw socket bridge (no protocol translation — workers will fail to
+    // authenticate, but this preserves the old behavior while kingdom-bridge is
+    // not yet installed).
     if which_exists("socat") {
         return (
             "socat".into(),
             vec![format!("UNIX-CONNECT:{socket}"), "-".into()],
         );
     }
-    // macOS nc and most Linux nc support -U for Unix sockets
     ("nc".into(), vec!["-U".into(), socket.into()])
+}
+
+/// Find kingdom-bridge in the same directory as the current executable.
+fn kingdom_bridge_path() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("kingdom-bridge")))
 }
 
 fn which_exists(binary: &str) -> bool {

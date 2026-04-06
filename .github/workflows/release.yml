@@ -58,9 +58,11 @@ jobs:
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} --bin kingdom
             cross build --release --target ${{ matrix.target }} -p kingdom-watchdog
+            cross build --release --target ${{ matrix.target }} -p kingdom-bridge
           else
             cargo build --release --target ${{ matrix.target }} --bin kingdom
             cargo build --release --target ${{ matrix.target }} -p kingdom-watchdog
+            cargo build --release --target ${{ matrix.target }} -p kingdom-bridge
           fi
 
       - name: Package
@@ -68,7 +70,7 @@ jobs:
         run: |
           DIR=target/${{ matrix.target }}/release
           ARCHIVE=${{ env.BINARY_NAME }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-          tar -czf "$ARCHIVE" -C "$DIR" kingdom kingdom-watchdog
+          tar -czf "$ARCHIVE" -C "$DIR" kingdom kingdom-watchdog kingdom-bridge
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
       - name: Upload artifact

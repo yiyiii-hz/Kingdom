@@ -635,6 +635,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kingdom-bridge"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kingdom-watchdog"
 version = "0.1.0"
 dependencies = [

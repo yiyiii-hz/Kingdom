@@ -43,11 +43,13 @@ git clone https://github.com/your-org/kingdom-v2
 cd kingdom-v2
 cargo build --release
 cargo build --release -p kingdom-watchdog
+cargo build --release -p kingdom-bridge
 cp target/release/kingdom ~/.local/bin/
 cp target/release/kingdom-watchdog ~/.local/bin/
+cp target/release/kingdom-bridge ~/.local/bin/
 ```
 
-> **Important:** `kingdom` and `kingdom-watchdog` must be in the **same directory**. At runtime, `kingdom-watchdog` locates the `kingdom` binary by looking in its own directory. Placing them in different locations will cause a startup error.
+> **Important:** `kingdom`, `kingdom-watchdog`, and `kingdom-bridge` must be in the **same directory**. At runtime, `kingdom-watchdog` locates `kingdom` by looking in its own directory, and the `kingdom` daemon locates `kingdom-bridge` the same way. Placing them in different locations will cause startup errors.
 
 Verify:
 
