@@ -16,6 +16,12 @@ pub struct Dispatcher {
     tools: HashMap<String, Box<dyn Tool>>,
 }
 
+impl Default for Dispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Dispatcher {
     pub fn new() -> Self {
         let mut dispatcher = Self {

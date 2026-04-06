@@ -9,6 +9,12 @@ pub struct RateLimitHandler {
     retry_counts: HashMap<String, u32>,
 }
 
+impl Default for RateLimitHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RateLimitHandler {
     pub fn new() -> Self {
         Self {

@@ -940,6 +940,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn confirmed_failover_launches_replacement_and_clears_pending() {
         let _env_lock = env_lock();
@@ -1069,6 +1070,7 @@ mod tests {
         assert!(!session.pending_failovers.contains_key("w1"));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn automatic_failover_records_stability_only_after_success() {
         let _env_lock = env_lock();
@@ -1115,7 +1117,7 @@ mod tests {
         );
 
         let before = storage.load_session().unwrap().unwrap();
-        assert!(before.provider_stability.get("codex").is_none());
+        assert!(!before.provider_stability.contains_key("codex"));
 
         let storage_clone = Arc::clone(&storage);
         tokio::spawn(async move {

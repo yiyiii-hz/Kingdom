@@ -6,6 +6,12 @@ pub struct NotificationQueue {
     pub events: Vec<ManagerNotification>,
 }
 
+impl Default for NotificationQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotificationQueue {
     pub fn new() -> Self {
         Self { events: Vec::new() }
@@ -24,6 +30,12 @@ pub struct HealthEventQueue {
     pub events: Vec<HealthEvent>,
 }
 
+impl Default for HealthEventQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthEventQueue {
     pub fn new() -> Self {
         Self { events: Vec::new() }
@@ -40,6 +52,12 @@ impl HealthEventQueue {
 
 pub struct RequestAwaiterRegistry {
     awaiters: HashMap<String, oneshot::Sender<String>>,
+}
+
+impl Default for RequestAwaiterRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestAwaiterRegistry {

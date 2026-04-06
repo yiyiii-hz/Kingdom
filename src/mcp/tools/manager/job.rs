@@ -789,7 +789,7 @@ mod tests {
         )
         .unwrap();
 
-        let child = std::process::Command::new("sleep")
+        let mut child = std::process::Command::new("sleep")
             .arg("30")
             .spawn()
             .unwrap();
@@ -819,6 +819,7 @@ mod tests {
         assert_eq!(session.workers["w1"].status, WorkerStatus::Idle);
         assert!(session.workers["w1"].job_id.is_none());
 
+        let _ = child.wait();
         let _ = client;
     }
 

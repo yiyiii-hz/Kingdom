@@ -270,8 +270,8 @@ fn kingdom_down_force_kills_daemon_and_watchdog_processes() {
     let storage = Storage::init(&workspace).unwrap();
     storage.save_session(&default_session(&workspace)).unwrap();
 
-    let daemon = Command::new("sleep").arg("30").spawn().unwrap();
-    let watchdog = Command::new("sleep").arg("30").spawn().unwrap();
+    let mut daemon = Command::new("sleep").arg("30").spawn().unwrap();
+    let mut watchdog = Command::new("sleep").arg("30").spawn().unwrap();
     fs::write(
         storage.root.join("daemon.pid"),
         format!("{}\n", daemon.id()),
@@ -293,6 +293,8 @@ fn kingdom_down_force_kills_daemon_and_watchdog_processes() {
     assert!(stdout.contains("Kingdom stopped."));
     assert!(!storage.root.join("daemon.pid").exists());
     assert!(!storage.root.join("watchdog.pid").exists());
+    let _ = daemon.wait();
+    let _ = watchdog.wait();
 }
 
 #[test]

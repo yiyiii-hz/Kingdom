@@ -741,6 +741,7 @@ mod tests {
             &events[0],
             HealthEvent::ProcessExited { worker_id, .. } if worker_id == "w1"
         ));
+        let _ = child.wait();
     }
 
     #[tokio::test]

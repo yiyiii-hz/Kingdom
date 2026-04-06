@@ -575,6 +575,7 @@ mod tests {
         assert!(session.workers["w1"].permissions.is_empty());
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn worker_create_launches_process_and_records_pid() {
         let _env_lock = env_lock();

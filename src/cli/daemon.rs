@@ -274,6 +274,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn ensure_manager_started_marks_failure_when_launch_fails() {
         let _env_lock = env_lock();

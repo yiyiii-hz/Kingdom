@@ -14,6 +14,10 @@ enum Commands {
         #[arg(default_value = ".")]
         workspace: PathBuf,
     },
+    Attach {
+        #[arg(default_value = "kingdom")]
+        session_name: String,
+    },
     Down {
         #[arg(default_value = ".")]
         workspace: PathBuf,
@@ -29,6 +33,32 @@ enum Commands {
         worker_id: String,
         provider: Option<String>,
     },
+    Log {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        #[arg(long)]
+        detail: Option<String>,
+        #[arg(long)]
+        actions: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    Doctor {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+    },
+    Cost {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+    },
+    Clean {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[tokio::main]
@@ -42,6 +72,12 @@ async fn main() {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 });
+        }
+        Commands::Attach { session_name } => {
+            kingdom_v2::cli::attach::run_attach(&session_name).unwrap_or_else(|e| {
+                eprintln!("Attach error: {e}");
+                std::process::exit(1);
+            });
         }
         Commands::Down { workspace, force } => {
             kingdom_v2::cli::down::run_down(workspace, force)
@@ -70,6 +106,39 @@ async fn main() {
                     eprintln!("Swap error: {e}");
                     std::process::exit(1);
                 });
+        }
+        Commands::Log {
+            workspace,
+            detail,
+            actions,
+            limit,
+        } => {
+            kingdom_v2::cli::log::run_log(workspace, detail, actions, limit).unwrap_or_else(|e| {
+                eprintln!("Log error: {e}");
+                std::process::exit(1);
+            });
+        }
+        Commands::Doctor { workspace } => {
+            kingdom_v2::cli::doctor::run_doctor(workspace).unwrap_or_else(|e| {
+                eprintln!("Doctor error: {e}");
+                std::process::exit(1);
+            });
+        }
+        Commands::Cost { workspace } => {
+            kingdom_v2::cli::cost::run_cost(workspace).unwrap_or_else(|e| {
+                eprintln!("Cost error: {e}");
+                std::process::exit(1);
+            });
+        }
+        Commands::Clean {
+            workspace,
+            dry_run,
+            all,
+        } => {
+            kingdom_v2::cli::clean::run_clean(workspace, dry_run, all).unwrap_or_else(|e| {
+                eprintln!("Clean error: {e}");
+                std::process::exit(1);
+            });
         }
     }
 }

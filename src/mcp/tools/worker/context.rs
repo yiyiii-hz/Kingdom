@@ -69,11 +69,26 @@ impl Tool for ContextPingTool {
         let params = parse_params::<ContextPingParams>(params)?;
         let mut session = load_session(&self.storage)?;
         let worker_id = worker_id(caller)?;
-        let worker = session.workers.get_mut(&worker_id).unwrap();
-        worker.context_usage_pct = Some(params.usage_pct);
-        worker.token_count = Some(params.token_count);
-        worker.last_heartbeat = Some(Utc::now());
+        let job_id = {
+            let worker = session.workers.get_mut(&worker_id).unwrap();
+            worker.context_usage_pct = Some(params.usage_pct);
+            worker.token_count = Some(params.token_count);
+            worker.last_heartbeat = Some(Utc::now());
+            worker.job_id.clone()
+        };
         save_session(&self.storage, &session)?;
+        append_action_log(
+            &self.storage,
+            caller,
+            self.name(),
+            json!({
+                "worker_id": worker_id,
+                "job_id": job_id,
+                "token_count": params.token_count,
+                "usage_pct": params.usage_pct,
+            }),
+            None,
+        )?;
         if let Some(urgency) = context_urgency(params.usage_pct) {
             self.health_events
                 .lock()
@@ -180,6 +195,23 @@ mod tests {
             .await
             .unwrap();
         assert!(health.lock().await.drain().is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_ping_writes_action_log() {
+        let (_temp, storage, push, _notifications, health, _awaiters, caller) = setup_worker();
+        let tool = ContextPingTool::new(Arc::clone(&storage), push, Arc::clone(&health));
+        tool.call(json!({"usage_pct":0.30,"token_count":1234}), &caller)
+            .await
+            .unwrap();
+
+        let entries = storage.read_action_log(None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].actor, "w1");
+        assert_eq!(entries[0].action, "context.ping");
+        assert_eq!(entries[0].params["worker_id"], json!("w1"));
+        assert_eq!(entries[0].params["job_id"], json!("job_001"));
+        assert_eq!(entries[0].params["token_count"], json!(1234));
     }
 
     #[tokio::test]

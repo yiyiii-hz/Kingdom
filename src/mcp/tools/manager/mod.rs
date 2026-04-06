@@ -42,6 +42,7 @@ pub fn register(
     failover::register(dispatcher, storage, push);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn register_with_launcher(
     dispatcher: &mut Dispatcher,
     storage: Arc<Storage>,

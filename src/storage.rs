@@ -1,5 +1,8 @@
 use crate::types::{ActionLogEntry, CheckpointContent, HandoffBrief, Job, JobResult, Session};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::json;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
@@ -13,6 +16,7 @@ const JOBS_DIR: &str = "jobs";
 const CHECKPOINTS_DIR: &str = "checkpoints";
 const HANDOFF_FILE: &str = "handoff.md";
 const RESULT_FILE: &str = "result.json";
+const ARCHIVE_DIR: &str = "archive";
 const GITIGNORE_FILE: &str = ".gitignore";
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -155,6 +159,128 @@ impl Storage {
         }
     }
 
+    /// 返回某个 job 的所有 checkpoint 文件路径，按文件名（即 checkpoint_id）升序。
+    pub fn list_checkpoint_files(&self, job_id: &str) -> Result<Vec<PathBuf>> {
+        let dir = self.job_dir(job_id).join(CHECKPOINTS_DIR);
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut files = fs::read_dir(dir)?
+            .filter_map(|entry| match entry {
+                Ok(entry) => {
+                    let path = entry.path();
+                    (path.extension().and_then(|ext| ext.to_str()) == Some("json")).then_some(path)
+                }
+                Err(_) => None,
+            })
+            .collect::<Vec<_>>();
+        files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        Ok(files)
+    }
+
+    /// 将 job 的 result.json 移动到 .kingdom/archive/{job_id}/result.json。
+    pub fn archive_job(&self, job_id: &str) -> Result<()> {
+        let src = self.job_dir(job_id).join(RESULT_FILE);
+        let dst = self.root.join(ARCHIVE_DIR).join(job_id).join(RESULT_FILE);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(src, dst)?;
+        Ok(())
+    }
+
+    /// 将 action log 中 cutoff 之前的条目压缩为摘要行，保留 cutoff 之后的条目。
+    pub fn compress_action_log(&self, cutoff: DateTime<Utc>) -> Result<()> {
+        let entries = self.read_action_log(None)?;
+        let (old_entries, new_entries): (Vec<_>, Vec<_>) =
+            entries.into_iter().partition(|entry| entry.timestamp < cutoff);
+        if old_entries.is_empty() {
+            return Ok(());
+        }
+
+        let date_from = old_entries
+            .first()
+            .map(|entry| entry.timestamp.to_rfc3339())
+            .unwrap_or_else(|| cutoff.to_rfc3339());
+        let date_to = old_entries
+            .last()
+            .map(|entry| entry.timestamp.to_rfc3339())
+            .unwrap_or_else(|| cutoff.to_rfc3339());
+
+        let mut max_tokens_by_worker: HashMap<String, u64> = HashMap::new();
+        let mut compressed_tokens = 0_u64;
+        for entry in &old_entries {
+            if entry.action == "context.ping" {
+                if let Some(token_count) = entry
+                    .params
+                    .get("token_count")
+                    .and_then(|value| value.as_u64())
+                {
+                    let actor = entry.actor.clone();
+                    max_tokens_by_worker
+                        .entry(actor)
+                        .and_modify(|current| *current = (*current).max(token_count))
+                        .or_insert(token_count);
+                }
+            } else if entry.action == "compressed_summary" {
+                compressed_tokens += entry
+                    .params
+                    .get("tokens")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+            }
+        }
+        let tokens = compressed_tokens
+            + max_tokens_by_worker
+                .values()
+                .copied()
+                .sum::<u64>();
+
+        let compressed_entry = ActionLogEntry {
+            timestamp: cutoff,
+            actor: "kingdom".to_string(),
+            action: "compressed_summary".to_string(),
+            params: json!({
+                "date_from": date_from,
+                "date_to": date_to,
+                "count": old_entries.len(),
+                "tokens": tokens,
+            }),
+            result: None,
+            error: None,
+        };
+
+        let mut out = Vec::new();
+        serde_json::to_writer(&mut out, &compressed_entry)?;
+        out.push(b'\n');
+        for entry in &new_entries {
+            serde_json::to_writer(&mut out, entry)?;
+            out.push(b'\n');
+        }
+        self.write_bytes_atomic(&self.root.join(LOGS_DIR).join(ACTION_LOG_FILE), &out)
+    }
+
+    /// 删除 job 所有 checkpoint 中，除最后一个之外、创建时间早于 cutoff 的 checkpoint 文件。
+    pub fn delete_old_checkpoints(&self, job_id: &str, cutoff: DateTime<Utc>) -> Result<usize> {
+        let files = self.list_checkpoint_files(job_id)?;
+        let last = files.last().cloned();
+        let mut deleted = 0;
+
+        for path in files {
+            if last.as_ref() == Some(&path) {
+                continue;
+            }
+            let checkpoint: CheckpointContent = serde_json::from_slice(&fs::read(&path)?)?;
+            if checkpoint.created_at < cutoff {
+                fs::remove_file(path)?;
+                deleted += 1;
+            }
+        }
+
+        Ok(deleted)
+    }
+
     fn state_path(&self) -> PathBuf {
         self.root.join(STATE_FILE)
     }
@@ -170,11 +296,15 @@ impl Storage {
     }
 
     fn write_json_atomic<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(value)?;
+        self.write_bytes_atomic(path, &bytes)
+    }
+
+    fn write_bytes_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let temp_path = path.with_extension("tmp");
-        let bytes = serde_json::to_vec_pretty(value)?;
         fs::write(&temp_path, bytes)?;
         fs::rename(temp_path, path)?;
         Ok(())
@@ -485,5 +615,112 @@ mod tests {
         let markdown = fs::read_to_string(handoff_path).unwrap();
         assert!(markdown.contains("## Original Intent"));
         assert!(markdown.contains("Do not create jobs/*/meta.json"));
+    }
+
+    #[test]
+    fn test_archive_job() {
+        let temp = tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        storage
+            .save_result(
+                "job_001",
+                &JobResult {
+                    summary: "done".to_string(),
+                    changed_files: vec![],
+                    completed_at: ts(),
+                    worker_id: "w1".to_string(),
+                },
+            )
+            .unwrap();
+
+        storage.archive_job("job_001").unwrap();
+
+        assert!(!storage.root.join("jobs/job_001/result.json").exists());
+        assert!(storage.root.join("archive/job_001/result.json").exists());
+    }
+
+    #[test]
+    fn test_compress_action_log() {
+        let temp = tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        let old_1 = ActionLogEntry {
+            timestamp: Utc.with_ymd_and_hms(2026, 4, 1, 10, 0, 0).unwrap(),
+            actor: "w1".to_string(),
+            action: "context.ping".to_string(),
+            params: json!({"token_count": 100, "job_id": "job_001"}),
+            result: None,
+            error: None,
+        };
+        let old_2 = ActionLogEntry {
+            timestamp: Utc.with_ymd_and_hms(2026, 4, 1, 11, 0, 0).unwrap(),
+            actor: "w1".to_string(),
+            action: "context.ping".to_string(),
+            params: json!({"token_count": 150, "job_id": "job_001"}),
+            result: None,
+            error: None,
+        };
+        let new_entry = ActionLogEntry {
+            timestamp: Utc.with_ymd_and_hms(2026, 4, 6, 11, 0, 0).unwrap(),
+            actor: "w2".to_string(),
+            action: "job.progress".to_string(),
+            params: json!({"job_id": "job_002"}),
+            result: None,
+            error: None,
+        };
+        storage.append_action_log(&old_1).unwrap();
+        storage.append_action_log(&old_2).unwrap();
+        storage.append_action_log(&new_entry).unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 4, 5, 0, 0, 0).unwrap();
+        storage.compress_action_log(cutoff).unwrap();
+
+        let entries = storage.read_action_log(None).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].action, "compressed_summary");
+        assert_eq!(entries[0].timestamp, cutoff);
+        assert_eq!(entries[0].params["count"], json!(2));
+        assert_eq!(entries[0].params["tokens"], json!(150));
+        assert_eq!(entries[1], new_entry);
+    }
+
+    #[test]
+    fn test_delete_old_checkpoints_keeps_last() {
+        let temp = tempdir().unwrap();
+        let storage = Storage::init(temp.path()).unwrap();
+        let first = CheckpointContent {
+            id: "ckpt_1".to_string(),
+            job_id: "job_001".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 3, 1, 10, 0, 0).unwrap(),
+            done: "one".to_string(),
+            abandoned: String::new(),
+            in_progress: String::new(),
+            remaining: String::new(),
+            pitfalls: String::new(),
+            git_commit: None,
+        };
+        let second = CheckpointContent {
+            id: "ckpt_2".to_string(),
+            job_id: "job_001".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 3, 2, 10, 0, 0).unwrap(),
+            done: "two".to_string(),
+            abandoned: String::new(),
+            in_progress: String::new(),
+            remaining: String::new(),
+            pitfalls: String::new(),
+            git_commit: None,
+        };
+        storage.save_checkpoint(&first).unwrap();
+        storage.save_checkpoint(&second).unwrap();
+
+        let deleted = storage
+            .delete_old_checkpoints(
+                "job_001",
+                Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(deleted, 1);
+        assert!(!storage.root.join("jobs/job_001/checkpoints/ckpt_1.json").exists());
+        assert!(storage.root.join("jobs/job_001/checkpoints/ckpt_2.json").exists());
     }
 }

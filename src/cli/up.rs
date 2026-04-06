@@ -38,6 +38,8 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
 
     let hash = crate::config::workspace_hash(&workspace);
     let storage = crate::storage::Storage::init(&workspace)?;
+    let config = crate::config::KingdomConfig::load_or_default(&storage.root.join("config.toml"));
+    let tmux = crate::tmux::TmuxController::new(config.tmux.session_name.clone());
     let pid_file = storage.root.join("daemon.pid");
     if pid_file.exists() {
         if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
@@ -45,12 +47,9 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
                 let alive =
                     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
                 if alive {
-                    let cfg = crate::config::KingdomConfig::load_or_default(
-                        &storage.root.join("config.toml"),
-                    );
                     println!(
                         "Kingdom is already running. Use `tmux attach -t {}` to connect.",
-                        cfg.tmux.session_name
+                        config.tmux.session_name
                     );
                     return Ok(());
                 }
@@ -58,7 +57,6 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
         }
     }
 
-    let config = crate::config::KingdomConfig::load_or_default(&storage.root.join("config.toml"));
     let providers = crate::process::discovery::ProviderDiscovery::detect(&config);
     println!("\nAvailable providers:");
     for p in &providers {
@@ -88,79 +86,92 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
         }
     }
 
-    println!("\nChoose manager provider:");
-    for (i, p) in available.iter().enumerate() {
-        println!("  {}) {}", i + 1, p.name);
-    }
-    print!("Enter number [1]: ");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    let idx = line.trim().parse::<usize>().unwrap_or(1).saturating_sub(1);
-    let manager_provider = available.get(idx).unwrap_or(&available[0]).name.clone();
-
-    let session = crate::types::Session {
-        id: format!("sess_{}", uuid::Uuid::new_v4().simple()),
-        workspace_path: workspace.display().to_string(),
-        workspace_hash: hash.clone(),
-        manager_id: Some("w0".to_string()),
-        workers: [(
-            "w0".to_string(),
-            crate::types::Worker {
-                id: "w0".to_string(),
-                provider: manager_provider.clone(),
-                role: crate::types::WorkerRole::Manager,
-                status: crate::types::WorkerStatus::Starting,
-                job_id: None,
-                pid: None,
-                pane_id: String::new(),
-                mcp_connected: false,
-                context_usage_pct: None,
-                token_count: None,
-                last_heartbeat: None,
-                last_progress: None,
-                permissions: vec![],
-                started_at: chrono::Utc::now(),
-            },
-        )]
-        .into_iter()
-        .collect(),
-        jobs: std::collections::HashMap::new(),
-        notes: vec![],
-        worker_seq: 0,
-        job_seq: 0,
-        request_seq: 0,
-        git_strategy: if is_git {
-            crate::types::GitStrategy::Branch
-        } else {
-            crate::types::GitStrategy::None
-        },
-        available_providers: available
-            .iter()
-            .map(|provider| provider.name.clone())
-            .collect(),
-        notification_mode: if config.notifications.mode == "push" {
-            crate::types::NotificationMode::Push
-        } else {
-            crate::types::NotificationMode::Poll
-        },
-        pending_requests: std::collections::HashMap::new(),
-        pending_failovers: std::collections::HashMap::new(),
-        provider_stability: std::collections::HashMap::new(),
-        created_at: chrono::Utc::now(),
-    };
-    storage.save_session(&session)?;
-
-    let session_name = &config.tmux.session_name;
-    let has_session = std::process::Command::new("tmux")
-        .args(["has-session", "-t", session_name])
-        .status()
-        .map(|s| s.success())
+    let existing_session = storage.load_session()?;
+    let resume_existing = existing_session
+        .as_ref()
+        .filter(|session| has_unfinished_jobs(session))
+        .map(|session| confirm_resume(session))
+        .transpose()?
         .unwrap_or(false);
-    if !has_session {
-        std::process::Command::new("tmux")
-            .args(["new-session", "-d", "-s", session_name])
-            .status()?;
+
+    let manager_provider = if resume_existing {
+        let mut session = existing_session.expect("resume_existing implies session");
+        mark_old_manager_stale(&tmux, &mut session);
+        storage.save_session(&session)?;
+        session
+            .manager_id
+            .as_ref()
+            .and_then(|id| session.workers.get(id))
+            .map(|worker| worker.provider.clone())
+            .unwrap_or_else(|| available[0].name.clone())
+    } else {
+        println!("\nChoose manager provider:");
+        for (i, p) in available.iter().enumerate() {
+            println!("  {}) {}", i + 1, p.name);
+        }
+        print!("Enter number [1]: ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let idx = line.trim().parse::<usize>().unwrap_or(1).saturating_sub(1);
+        let manager_provider = available.get(idx).unwrap_or(&available[0]).name.clone();
+
+        let session = crate::types::Session {
+            id: format!("sess_{}", uuid::Uuid::new_v4().simple()),
+            workspace_path: workspace.display().to_string(),
+            workspace_hash: hash.clone(),
+            manager_id: Some("w0".to_string()),
+            workers: [(
+                "w0".to_string(),
+                crate::types::Worker {
+                    id: "w0".to_string(),
+                    provider: manager_provider.clone(),
+                    role: crate::types::WorkerRole::Manager,
+                    status: crate::types::WorkerStatus::Starting,
+                    job_id: None,
+                    pid: None,
+                    pane_id: String::new(),
+                    mcp_connected: false,
+                    context_usage_pct: None,
+                    token_count: None,
+                    last_heartbeat: None,
+                    last_progress: None,
+                    permissions: vec![],
+                    started_at: chrono::Utc::now(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            jobs: std::collections::HashMap::new(),
+            notes: vec![],
+            worker_seq: 0,
+            job_seq: 0,
+            request_seq: 0,
+            git_strategy: if is_git {
+                crate::types::GitStrategy::Branch
+            } else {
+                crate::types::GitStrategy::None
+            },
+            available_providers: available
+                .iter()
+                .map(|provider| provider.name.clone())
+                .collect(),
+            notification_mode: if config.notifications.mode == "push" {
+                crate::types::NotificationMode::Push
+            } else {
+                crate::types::NotificationMode::Poll
+            },
+            pending_requests: std::collections::HashMap::new(),
+            pending_failovers: std::collections::HashMap::new(),
+            provider_stability: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+        };
+        storage.save_session(&session)?;
+        manager_provider
+    };
+
+    if !tmux.session_exists() {
+        tmux.create_session(None)?;
     }
 
     let watchdog = std::env::current_exe()
@@ -187,6 +198,7 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     }
 
     let manager_state = wait_for_manager_state(&storage, std::time::Duration::from_secs(20)).await;
+    let session_name = &config.tmux.session_name;
 
     println!("\nKingdom started. Provider: {manager_provider}");
     println!("  workspace hash: {hash}");
@@ -205,6 +217,99 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     }
     println!("  Attach with: tmux attach -t {session_name}");
     Ok(())
+}
+
+fn has_unfinished_jobs(session: &crate::types::Session) -> bool {
+    session.jobs.values().any(|job| {
+        !matches!(
+            job.status,
+            crate::types::JobStatus::Completed
+                | crate::types::JobStatus::Cancelled
+                | crate::types::JobStatus::Failed
+        )
+    })
+}
+
+fn confirm_resume(session: &crate::types::Session) -> Result<bool, Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    println!("\n检测到上次 session 有未完成工作：\n");
+    let mut jobs = session.jobs.values().collect::<Vec<_>>();
+    jobs.sort_by_key(|job| job.id.clone());
+    for job in jobs {
+        println!("  {:<8} {:<24} {}", job.id, truncate(&job.intent, 20), describe_job(session, job));
+    }
+    if !session.notes.is_empty() {
+        println!("\nworkspace.notes:");
+        for note in session.notes.iter().take(5) {
+            println!("  · {}", truncate(&note.content, 100));
+        }
+    }
+    print!("\n继续上次工作？[Y/n] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let answer = line.trim().to_ascii_lowercase();
+    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+}
+
+fn describe_job(session: &crate::types::Session, job: &crate::types::Job) -> String {
+    match job.status {
+        crate::types::JobStatus::Running => {
+            let detail = job
+                .worker_id
+                .as_ref()
+                .and_then(|worker_id| session.workers.get(worker_id))
+                .map(|worker| {
+                    if worker.mcp_connected {
+                        format!("{worker_id} 进行中", worker_id = worker.id)
+                    } else {
+                        format!("{worker_id} 已暂停", worker_id = worker.id)
+                    }
+                })
+                .unwrap_or_else(|| "未绑定 worker".to_string());
+            format!("[running → {detail}]")
+        }
+        crate::types::JobStatus::Waiting => {
+            if job.depends_on.is_empty() {
+                "[waiting]".to_string()
+            } else {
+                format!("[waiting → 依赖 {}]", job.depends_on.join(", "))
+            }
+        }
+        crate::types::JobStatus::Completed => "[completed ✓]".to_string(),
+        crate::types::JobStatus::Failed => "[failed]".to_string(),
+        crate::types::JobStatus::Pending => "[pending]".to_string(),
+        crate::types::JobStatus::Paused => "[paused]".to_string(),
+        crate::types::JobStatus::Cancelled => "[cancelled]".to_string(),
+        crate::types::JobStatus::Cancelling => "[cancelling]".to_string(),
+    }
+}
+
+fn truncate(input: &str, max_chars: usize) -> String {
+    let count = input.chars().count();
+    if count <= max_chars {
+        return input.to_string();
+    }
+    input.chars().take(max_chars).collect::<String>() + "…"
+}
+
+fn mark_old_manager_stale(tmux: &crate::tmux::TmuxController, session: &mut crate::types::Session) {
+    let Some(manager_id) = session.manager_id.clone() else {
+        return;
+    };
+    let Some(manager) = session.workers.get_mut(&manager_id) else {
+        return;
+    };
+    if !manager.pane_id.is_empty() {
+        let _ = tmux.inject_line(
+            &manager.pane_id,
+            "[Kingdom] 此 manager 已被新 manager 接手，请切换到新 manager pane",
+        );
+    }
+    manager.status = crate::types::WorkerStatus::Failed;
+    manager.mcp_connected = false;
+    manager.pid = None;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

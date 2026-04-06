@@ -286,6 +286,7 @@ pub(crate) mod testsupport {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn setup_worker() -> (
         TempDir,
         Arc<Storage>,

@@ -1,4 +1,9 @@
+pub mod attach;
+pub mod clean;
+pub mod cost;
 pub mod daemon;
+pub mod doctor;
 pub mod down;
+pub mod log;
 pub mod swap;
 pub mod up;

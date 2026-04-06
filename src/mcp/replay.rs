@@ -8,6 +8,12 @@ pub struct RecentCalls {
     calls: HashMap<(String, String), (Instant, Value)>,
 }
 
+impl Default for RecentCalls {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RecentCalls {
     pub fn new() -> Self {
         Self {

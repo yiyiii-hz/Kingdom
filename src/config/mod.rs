@@ -16,6 +16,8 @@ pub struct KingdomConfig {
     pub health: HealthConfig,
     #[serde(default)]
     pub failover: FailoverConfig,
+    #[serde(default)]
+    pub cost: CostConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,6 +74,7 @@ impl KingdomConfig {
             notifications: NotificationsConfig::default(),
             health: HealthConfig::default(),
             failover: FailoverConfig::default(),
+            cost: CostConfig::default(),
         }
     }
 
@@ -145,6 +148,59 @@ impl Default for FailoverConfig {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CostConfig {
+    #[serde(default = "default_claude_input_per_1m")]
+    pub claude_input_per_1m: f64,
+    #[serde(default = "default_claude_output_per_1m")]
+    pub claude_output_per_1m: f64,
+    #[serde(default = "default_codex_input_per_1m")]
+    pub codex_input_per_1m: f64,
+    #[serde(default = "default_codex_output_per_1m")]
+    pub codex_output_per_1m: f64,
+    #[serde(default = "default_gemini_input_per_1m")]
+    pub gemini_input_per_1m: f64,
+    #[serde(default = "default_gemini_output_per_1m")]
+    pub gemini_output_per_1m: f64,
+}
+
+impl Default for CostConfig {
+    fn default() -> Self {
+        Self {
+            claude_input_per_1m: default_claude_input_per_1m(),
+            claude_output_per_1m: default_claude_output_per_1m(),
+            codex_input_per_1m: default_codex_input_per_1m(),
+            codex_output_per_1m: default_codex_output_per_1m(),
+            gemini_input_per_1m: default_gemini_input_per_1m(),
+            gemini_output_per_1m: default_gemini_output_per_1m(),
+        }
+    }
+}
+
+fn default_claude_input_per_1m() -> f64 {
+    3.00
+}
+
+fn default_claude_output_per_1m() -> f64 {
+    15.00
+}
+
+fn default_codex_input_per_1m() -> f64 {
+    2.50
+}
+
+fn default_codex_output_per_1m() -> f64 {
+    10.00
+}
+
+fn default_gemini_input_per_1m() -> f64 {
+    0.075
+}
+
+fn default_gemini_output_per_1m() -> f64 {
+    0.30
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +247,16 @@ mod tests {
         assert_eq!(cfg.failover.manual_stop_grace_seconds, 5);
         assert_eq!(cfg.failover.swap_checkpoint_timeout_seconds, 10);
         assert_eq!(cfg.failover.cancel_grace_seconds, 30);
+    }
+
+    #[test]
+    fn cost_config_defaults() {
+        let cfg = KingdomConfig::default_config();
+        assert_eq!(cfg.cost.claude_input_per_1m, 3.00);
+        assert_eq!(cfg.cost.claude_output_per_1m, 15.00);
+        assert_eq!(cfg.cost.codex_input_per_1m, 2.50);
+        assert_eq!(cfg.cost.codex_output_per_1m, 10.00);
+        assert_eq!(cfg.cost.gemini_input_per_1m, 0.075);
+        assert_eq!(cfg.cost.gemini_output_per_1m, 0.30);
     }
 }

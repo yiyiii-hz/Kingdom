@@ -43,6 +43,12 @@ pub struct PushRegistry {
     connections: HashMap<String, Arc<Mutex<WriteHalf<UnixStream>>>>,
 }
 
+impl Default for PushRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PushRegistry {
     pub fn new() -> Self {
         Self {
