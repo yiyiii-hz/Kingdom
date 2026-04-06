@@ -112,7 +112,7 @@ impl ProcessLauncher {
                     "#{pane_id}",
                 ])
                 .output()
-        } else if worker_index <= 2 {
+        } else if worker_index <= 3 {
             std::process::Command::new("tmux")
                 .args([
                     "split-window",
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn fourth_worker_launch_uses_new_tmux_window() {
+    fn fourth_additional_worker_launch_uses_new_tmux_window() {
         with_fake_tmux(|tmp| {
             let workspace = tmp.join("workspace");
             fs::create_dir_all(&workspace).unwrap();
@@ -284,7 +284,7 @@ mod tests {
 
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result =
-                rt.block_on(launcher.launch("codex", WorkerRole::Worker, "w4", 3, &storage_root));
+                rt.block_on(launcher.launch("codex", WorkerRole::Worker, "w4", 4, &storage_root));
             let result = result.unwrap();
 
             assert_eq!(result.pane_id, "%4");

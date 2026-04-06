@@ -6,34 +6,14 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use tempfile::TempDir;
 
-fn write_executable(path: &Path, content: &str) {
-    fs::write(path, content).unwrap();
-    let mut perms = fs::metadata(path).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).unwrap();
-}
-
-fn copy_executable(src: &Path, dst: &Path) {
-    fs::copy(src, dst).unwrap();
-    let mut perms = fs::metadata(dst).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(dst, perms).unwrap();
-}
-
-fn kingdom_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_kingdom"))
-}
-
-fn watchdog_bin() -> PathBuf {
-    kingdom_bin().parent().unwrap().join("kingdom-watchdog")
-}
+#[path = "common/mod.rs"]
+mod common;
+use common::*;
 
 fn fixture() -> (TempDir, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
@@ -83,43 +63,6 @@ fn default_session(workspace: &Path) -> Session {
         provider_stability: HashMap::new(),
         created_at: Utc::now(),
     }
-}
-
-fn run_command_with_input(mut cmd: Command, input: &str) -> Output {
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    if !input.is_empty() {
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-    }
-    child.wait_with_output().unwrap()
-}
-
-fn set_path(cmd: &mut Command, bin_dir: &Path) {
-    let old_path = std::env::var("PATH").unwrap_or_default();
-    cmd.env("PATH", format!("{}:{}", bin_dir.display(), old_path));
-}
-
-fn wait_until<F>(timeout: Duration, mut predicate: F) -> bool
-where
-    F: FnMut() -> bool,
-{
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if predicate() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    predicate()
 }
 
 #[test]

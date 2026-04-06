@@ -92,6 +92,7 @@ impl HealthMonitor {
         now: DateTime<Utc>,
     ) {
         let context_events = self.health_event_queue.lock().await.drain();
+        let mut escalations = Vec::new();
         for event in context_events {
             if let HealthEvent::ContextThreshold {
                 ref worker_id,
@@ -144,7 +145,14 @@ impl HealthMonitor {
                         checkpoint_count_at_send,
                     },
                 );
+
+                if matches!(urgency, CheckpointUrgency::Critical) {
+                    escalations.push(event.clone());
+                }
             }
+        }
+        if !escalations.is_empty() {
+            self.emit_events(escalations).await;
         }
     }
 

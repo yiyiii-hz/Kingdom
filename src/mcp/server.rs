@@ -502,7 +502,17 @@ async fn perform_hello(
         }
     };
 
-    let mut updated_session = session.clone();
+    let mut updated_session = match storage.load_session() {
+        Ok(Some(current)) => current,
+        Ok(None) => session.clone(),
+        Err(error) => {
+            return Err(json!({
+                "jsonrpc":"2.0",
+                "id": request.get("id").cloned().unwrap_or(Value::Null),
+                "error": {"code": -32603, "message": error.to_string()},
+            }))
+        }
+    };
     if let Some(worker_id) = &worker_id {
         if let Some(worker) = updated_session.workers.get_mut(worker_id) {
             worker.mcp_connected = true;
