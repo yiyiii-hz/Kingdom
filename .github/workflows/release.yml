@@ -53,20 +53,22 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} --bin kingdom
+            cross build --release --target ${{ matrix.target }} -p kingdom-watchdog
           else
             cargo build --release --target ${{ matrix.target }} --bin kingdom
+            cargo build --release --target ${{ matrix.target }} -p kingdom-watchdog
           fi
 
       - name: Package
         shell: bash
         run: |
-          BINARY=target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}
+          DIR=target/${{ matrix.target }}/release
           ARCHIVE=${{ env.BINARY_NAME }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-          tar -czf "$ARCHIVE" -C "$(dirname $BINARY)" "$(basename $BINARY)"
+          tar -czf "$ARCHIVE" -C "$DIR" kingdom kingdom-watchdog
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
       - name: Upload artifact

@@ -1,5 +1,7 @@
 # Kingdom v2
 
+> Bilingual versions: [English](./README.en.md) | [中文](./README.zh.md)
+
 Terminal-native AI worker orchestration. Multiple providers, one session, automatic failover.
 
 ```
@@ -40,7 +42,9 @@ Kingdom keeps work running when providers fail. When Codex hits a context limit 
 git clone https://github.com/your-org/kingdom-v2
 cd kingdom-v2
 cargo build --release
+cargo build --release -p kingdom-watchdog
 cp target/release/kingdom ~/.local/bin/
+cp target/release/kingdom-watchdog ~/.local/bin/
 ```
 
 Verify:
