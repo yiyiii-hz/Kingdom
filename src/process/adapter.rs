@@ -46,6 +46,8 @@ impl ProviderAdapter for CodexAdapter {
     fn build_args(&self, mcp_config_path: &Path, _role: WorkerRole) -> Vec<String> {
         vec![
             self.binary.to_string_lossy().into_owned(),
+            "--ask-for-approval".into(),
+            "never".into(),
             "--mcp-config".into(),
             mcp_config_path.to_string_lossy().into_owned(),
         ]
@@ -64,6 +66,7 @@ impl ProviderAdapter for GeminiAdapter {
     fn build_args(&self, mcp_config_path: &Path, _role: WorkerRole) -> Vec<String> {
         vec![
             self.binary.to_string_lossy().into_owned(),
+            "--yolo".into(),
             "--mcp-config".into(),
             mcp_config_path.to_string_lossy().into_owned(),
         ]
