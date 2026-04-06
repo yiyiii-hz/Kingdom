@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
-    let workspace = workspace.canonicalize().unwrap_or_else(|_| workspace.clone());
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.clone());
 
     if !std::process::Command::new("which")
         .arg("tmux")
@@ -15,7 +17,12 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     }
 
     let is_git = std::process::Command::new("git")
-        .args(["-C", workspace.to_str().unwrap_or("."), "rev-parse", "--git-dir"])
+        .args([
+            "-C",
+            workspace.to_str().unwrap_or("."),
+            "rev-parse",
+            "--git-dir",
+        ])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -38,8 +45,9 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
                 let alive =
                     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
                 if alive {
-                    let cfg =
-                        crate::config::KingdomConfig::load_or_default(&storage.root.join("config.toml"));
+                    let cfg = crate::config::KingdomConfig::load_or_default(
+                        &storage.root.join("config.toml"),
+                    );
                     println!(
                         "Kingdom is already running. Use `tmux attach -t {}` to connect.",
                         cfg.tmux.session_name
@@ -91,6 +99,58 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
     let idx = line.trim().parse::<usize>().unwrap_or(1).saturating_sub(1);
     let manager_provider = available.get(idx).unwrap_or(&available[0]).name.clone();
 
+    let session = crate::types::Session {
+        id: format!("sess_{}", uuid::Uuid::new_v4().simple()),
+        workspace_path: workspace.display().to_string(),
+        workspace_hash: hash.clone(),
+        manager_id: Some("w0".to_string()),
+        workers: [(
+            "w0".to_string(),
+            crate::types::Worker {
+                id: "w0".to_string(),
+                provider: manager_provider.clone(),
+                role: crate::types::WorkerRole::Manager,
+                status: crate::types::WorkerStatus::Starting,
+                job_id: None,
+                pid: None,
+                pane_id: String::new(),
+                mcp_connected: false,
+                context_usage_pct: None,
+                token_count: None,
+                last_heartbeat: None,
+                last_progress: None,
+                permissions: vec![],
+                started_at: chrono::Utc::now(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        jobs: std::collections::HashMap::new(),
+        notes: vec![],
+        worker_seq: 0,
+        job_seq: 0,
+        request_seq: 0,
+        git_strategy: if is_git {
+            crate::types::GitStrategy::Branch
+        } else {
+            crate::types::GitStrategy::None
+        },
+        available_providers: available
+            .iter()
+            .map(|provider| provider.name.clone())
+            .collect(),
+        notification_mode: if config.notifications.mode == "push" {
+            crate::types::NotificationMode::Push
+        } else {
+            crate::types::NotificationMode::Poll
+        },
+        pending_requests: std::collections::HashMap::new(),
+        pending_failovers: std::collections::HashMap::new(),
+        provider_stability: std::collections::HashMap::new(),
+        created_at: chrono::Utc::now(),
+    };
+    storage.save_session(&session)?;
+
     let session_name = &config.tmux.session_name;
     let has_session = std::process::Command::new("tmux")
         .args(["has-session", "-t", session_name])
@@ -126,11 +186,76 @@ pub async fn run_up(workspace: PathBuf) -> Result<(), Box<dyn std::error::Error>
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
+    let manager_state = wait_for_manager_state(&storage, std::time::Duration::from_secs(20)).await;
+
     println!("\nKingdom started. Provider: {manager_provider}");
     println!("  workspace hash: {hash}");
     println!("  tmux session: {session_name}");
+    match manager_state {
+        ManagerStartupState::Connected { pid, pane_id } => {
+            println!("  manager pid: {pid}");
+            println!("  manager pane: {pane_id}");
+        }
+        ManagerStartupState::Failed { reason } => {
+            println!("  manager startup degraded: {reason}");
+        }
+        ManagerStartupState::Pending => {
+            println!("  manager startup pending: waiting for MCP connection");
+        }
+    }
     println!("  Attach with: tmux attach -t {session_name}");
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ManagerStartupState {
+    Connected { pid: u32, pane_id: String },
+    Failed { reason: String },
+    Pending,
+}
+
+async fn wait_for_manager_state(
+    storage: &crate::storage::Storage,
+    timeout: std::time::Duration,
+) -> ManagerStartupState {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let Some(session) = storage.load_session().ok().flatten() else {
+            return ManagerStartupState::Pending;
+        };
+        let Some(manager_id) = session.manager_id.as_ref() else {
+            return ManagerStartupState::Pending;
+        };
+        let Some(manager) = session.workers.get(manager_id) else {
+            return ManagerStartupState::Pending;
+        };
+        if manager.mcp_connected {
+            if let (Some(pid), false) = (manager.pid, manager.pane_id.is_empty()) {
+                return ManagerStartupState::Connected {
+                    pid,
+                    pane_id: manager.pane_id.clone(),
+                };
+            }
+        }
+        if manager.status == crate::types::WorkerStatus::Failed {
+            let reason = storage
+                .read_action_log(Some(10))
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .rev()
+                        .find(|entry| entry.action == "manager.start_failed")
+                        .and_then(|entry| entry.error)
+                })
+                .unwrap_or_else(|| "manager start failed".to_string());
+            return ManagerStartupState::Failed { reason };
+        }
+        if std::time::Instant::now() > deadline {
+            return ManagerStartupState::Pending;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 fn detect_language(workspace: &Path) -> String {
@@ -196,5 +321,78 @@ mod tests {
         assert!(doc.contains("语言：Rust"));
         assert!(doc.contains("## 架构约束"));
         assert!(doc.contains("## 风格偏好"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_manager_state_reads_connected_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = crate::storage::Storage::init(tmp.path()).unwrap();
+        let mut session = crate::types::Session {
+            id: "sess_1".to_string(),
+            workspace_path: tmp.path().display().to_string(),
+            workspace_hash: "hash".to_string(),
+            manager_id: Some("w0".to_string()),
+            workers: [(
+                "w0".to_string(),
+                crate::types::Worker {
+                    id: "w0".to_string(),
+                    provider: "codex".to_string(),
+                    role: crate::types::WorkerRole::Manager,
+                    status: crate::types::WorkerStatus::Idle,
+                    job_id: None,
+                    pid: Some(42),
+                    pane_id: "%1".to_string(),
+                    mcp_connected: true,
+                    context_usage_pct: None,
+                    token_count: None,
+                    last_heartbeat: None,
+                    last_progress: None,
+                    permissions: vec![],
+                    started_at: chrono::Utc::now(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            jobs: std::collections::HashMap::new(),
+            notes: vec![],
+            worker_seq: 0,
+            job_seq: 0,
+            request_seq: 0,
+            git_strategy: crate::types::GitStrategy::None,
+            available_providers: vec!["codex".to_string()],
+            notification_mode: crate::types::NotificationMode::Poll,
+            pending_requests: std::collections::HashMap::new(),
+            pending_failovers: std::collections::HashMap::new(),
+            provider_stability: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+        };
+        storage.save_session(&session).unwrap();
+        assert_eq!(
+            wait_for_manager_state(&storage, std::time::Duration::from_millis(10)).await,
+            ManagerStartupState::Connected {
+                pid: 42,
+                pane_id: "%1".to_string(),
+            }
+        );
+
+        session.workers.get_mut("w0").unwrap().mcp_connected = false;
+        session.workers.get_mut("w0").unwrap().status = crate::types::WorkerStatus::Failed;
+        storage.save_session(&session).unwrap();
+        storage
+            .append_action_log(&crate::types::ActionLogEntry {
+                timestamp: chrono::Utc::now(),
+                actor: "kingdom-daemon".to_string(),
+                action: "manager.start_failed".to_string(),
+                params: serde_json::json!({ "worker_id": "w0" }),
+                result: None,
+                error: Some("connect timeout".to_string()),
+            })
+            .unwrap();
+        assert_eq!(
+            wait_for_manager_state(&storage, std::time::Duration::from_millis(10)).await,
+            ManagerStartupState::Failed {
+                reason: "connect timeout".to_string(),
+            }
+        );
     }
 }

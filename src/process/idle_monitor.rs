@@ -71,11 +71,11 @@ pub async fn idle_monitor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::KingdomConfig;
     use crate::config::IdleConfig;
+    use crate::config::KingdomConfig;
     use crate::types::{GitStrategy, NotificationMode, Session, Worker, WorkerRole, WorkerStatus};
-    use std::path::PathBuf;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     fn idle_worker(id: &str, pid: u32, idle_since_minutes: i64) -> Worker {
         let started = Utc::now() - chrono::Duration::minutes(idle_since_minutes);
@@ -114,6 +114,7 @@ mod tests {
             notification_mode: NotificationMode::Poll,
             pending_requests: HashMap::new(),
             pending_failovers: HashMap::new(),
+            provider_stability: HashMap::new(),
             created_at: Utc::now(),
         }
     }
@@ -123,7 +124,10 @@ mod tests {
         let config = IdleConfig {
             timeout_minutes: 30,
         };
-        let session = make_session(vec![idle_worker("w1", 1001, 40), idle_worker("w2", 1002, 10)]);
+        let session = make_session(vec![
+            idle_worker("w1", 1001, 40),
+            idle_worker("w2", 1002, 10),
+        ]);
         let result = find_idle_workers(&session, &config, Utc::now());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "w1");
@@ -151,7 +155,10 @@ mod tests {
 
     #[tokio::test]
     async fn run_once_terminates_idle_process_and_updates_status() {
-        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
         let pid = child.id();
         let worker = idle_worker("w1", pid, 60);
         let session = Mutex::new(make_session(vec![worker]));
@@ -167,7 +174,13 @@ mod tests {
             storage.save_session(&snapshot).unwrap();
         }
 
-        run_once(&session, &launcher, &IdleConfig { timeout_minutes: 5 }, &storage).await;
+        run_once(
+            &session,
+            &launcher,
+            &IdleConfig { timeout_minutes: 5 },
+            &storage,
+        )
+        .await;
 
         let saved = storage.load_session().unwrap().unwrap();
         assert_eq!(saved.workers["w1"].status, WorkerStatus::Terminated);

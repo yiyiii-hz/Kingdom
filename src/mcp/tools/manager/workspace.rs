@@ -14,10 +14,23 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) {
-    dispatcher.register(Box::new(WorkspaceStatusTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkspaceLogTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkspaceNoteTool::new(Arc::clone(&storage), Arc::clone(&push))));
+pub fn register(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+) {
+    dispatcher.register(Box::new(WorkspaceStatusTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkspaceLogTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkspaceNoteTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(WorkspaceNotesTool::new(storage, push)));
 }
 

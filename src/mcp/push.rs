@@ -100,7 +100,10 @@ mod tests {
         registry.register("w1", write_half);
 
         registry
-            .push("w1", json!({"method":"kingdom.event","params":{"type":"job_completed"}}))
+            .push(
+                "w1",
+                json!({"method":"kingdom.event","params":{"type":"job_completed"}}),
+            )
             .await
             .unwrap();
 

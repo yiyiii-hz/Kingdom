@@ -253,13 +253,8 @@ mod tests {
             let launcher = ProcessLauncher::new(workspace, config, "hash123".to_string());
 
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(launcher.launch(
-                "codex",
-                WorkerRole::Worker,
-                "w1",
-                1,
-                &storage_root,
-            ));
+            let result =
+                rt.block_on(launcher.launch("codex", WorkerRole::Worker, "w1", 1, &storage_root));
             let result = result.unwrap();
 
             assert_eq!(result.pid, 4242);
@@ -288,13 +283,8 @@ mod tests {
             let launcher = ProcessLauncher::new(workspace, config, "hash123".to_string());
 
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(launcher.launch(
-                "codex",
-                WorkerRole::Worker,
-                "w4",
-                3,
-                &storage_root,
-            ));
+            let result =
+                rt.block_on(launcher.launch("codex", WorkerRole::Worker, "w4", 3, &storage_root));
             let result = result.unwrap();
 
             assert_eq!(result.pane_id, "%4");

@@ -1,12 +1,11 @@
 use std::path::{Path, PathBuf};
 
-pub async fn run_down(
-    workspace: PathBuf,
-    force: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_down(workspace: PathBuf, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
-    let workspace = workspace.canonicalize().unwrap_or_else(|_| workspace.clone());
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.clone());
     let storage = crate::storage::Storage::init(&workspace)?;
     let storage_root = storage.root.clone();
     let session = storage
@@ -96,7 +95,10 @@ mod tests {
 
     #[test]
     fn terminate_by_pid_file_kills_real_process() {
-        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let pid_file = tmp.path().join("daemon.pid");
         std::fs::write(&pid_file, format!("{}\n", child.id())).unwrap();

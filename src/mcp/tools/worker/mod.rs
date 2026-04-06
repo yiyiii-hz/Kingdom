@@ -3,9 +3,7 @@ use crate::mcp::error::McpError;
 use crate::mcp::push::PushRegistry;
 use crate::mcp::queues::{HealthEventQueue, NotificationQueue, RequestAwaiterRegistry};
 use crate::mcp::server::ConnectedClient;
-use crate::mcp::tools::manager::{
-    git_create_branch, git_current_commit, storage_error,
-};
+use crate::mcp::tools::manager::{git_create_branch, git_current_commit, storage_error};
 use crate::storage::Storage;
 use crate::types::{CheckpointUrgency, GitStrategy, Job, JobStatus, Session};
 use chrono::Utc;
@@ -46,7 +44,10 @@ pub fn register(
     subtask::register(dispatcher, storage, push, notifications);
 }
 
-pub(crate) fn caller_job_id(session: &Session, caller: &ConnectedClient) -> Result<String, McpError> {
+pub(crate) fn caller_job_id(
+    session: &Session,
+    caller: &ConnectedClient,
+) -> Result<String, McpError> {
     let worker_id = caller
         .worker_id
         .as_deref()
@@ -79,10 +80,13 @@ pub(crate) fn ensure_worker_owns_job(
 }
 
 pub(crate) fn worker_id(caller: &ConnectedClient) -> Result<String, McpError> {
-    caller.worker_id.clone().ok_or_else(|| McpError::Unauthorized {
-        tool: "worker-tool".to_string(),
-        role: "no worker_id".to_string(),
-    })
+    caller
+        .worker_id
+        .clone()
+        .ok_or_else(|| McpError::Unauthorized {
+            tool: "worker-tool".to_string(),
+            role: "no worker_id".to_string(),
+        })
 }
 
 pub(crate) fn validate_min_chars(field: &str, value: &str, min: usize) -> Result<(), McpError> {
@@ -96,7 +100,10 @@ pub(crate) fn validate_min_chars(field: &str, value: &str, min: usize) -> Result
 }
 
 pub(crate) fn changed_files_for_job(session: &Session, job: &Job) -> Result<Vec<String>, McpError> {
-    if !matches!(session.git_strategy, GitStrategy::Branch | GitStrategy::Commit) {
+    if !matches!(
+        session.git_strategy,
+        GitStrategy::Branch | GitStrategy::Commit
+    ) {
         return Ok(Vec::new());
     }
     let Some(base) = &job.branch_start_commit else {
@@ -113,7 +120,9 @@ pub(crate) fn changed_files_for_job(session: &Session, job: &Job) -> Result<Vec<
         .output()
         .map_err(storage_error)?;
     if !output.status.success() {
-        return Err(storage_error(String::from_utf8_lossy(&output.stderr).trim()));
+        return Err(storage_error(
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -129,7 +138,9 @@ pub(crate) fn run_git(workspace_path: &str, args: &[&str]) -> Result<String, Mcp
         .output()
         .map_err(storage_error)?;
     if !output.status.success() {
-        return Err(storage_error(String::from_utf8_lossy(&output.stderr).trim()));
+        return Err(storage_error(
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -146,7 +157,10 @@ pub(crate) fn context_urgency(usage_pct: f32) -> Option<CheckpointUrgency> {
     }
 }
 
-pub(crate) fn resolve_workspace_path(workspace_root: &str, requested_path: &str) -> Result<PathBuf, McpError> {
+pub(crate) fn resolve_workspace_path(
+    workspace_root: &str,
+    requested_path: &str,
+) -> Result<PathBuf, McpError> {
     if Path::new(requested_path)
         .components()
         .any(|component| matches!(component, Component::ParentDir))
@@ -171,10 +185,12 @@ pub(crate) fn resolve_workspace_path(workspace_root: &str, requested_path: &str)
             })?
             .canonicalize()
             .map_err(storage_error)?;
-        let file_name = joined.file_name().ok_or_else(|| McpError::ValidationFailed {
-            field: "path".to_string(),
-            reason: "path traversal not allowed".to_string(),
-        })?;
+        let file_name = joined
+            .file_name()
+            .ok_or_else(|| McpError::ValidationFailed {
+                field: "path".to_string(),
+                reason: "path traversal not allowed".to_string(),
+            })?;
         parent.join(file_name)
     };
     if !resolved.starts_with(&workspace) {
@@ -186,10 +202,15 @@ pub(crate) fn resolve_workspace_path(workspace_root: &str, requested_path: &str)
     Ok(resolved)
 }
 
-pub(crate) fn default_tree_path(workspace_root: &str, path: Option<String>) -> Result<PathBuf, McpError> {
+pub(crate) fn default_tree_path(
+    workspace_root: &str,
+    path: Option<String>,
+) -> Result<PathBuf, McpError> {
     match path {
         Some(path) => resolve_workspace_path(workspace_root, &path),
-        None => Path::new(workspace_root).canonicalize().map_err(storage_error),
+        None => Path::new(workspace_root)
+            .canonicalize()
+            .map_err(storage_error),
     }
 }
 

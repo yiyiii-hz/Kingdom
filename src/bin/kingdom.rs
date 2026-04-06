@@ -23,6 +23,12 @@ enum Commands {
     Daemon {
         workspace: PathBuf,
     },
+    Swap {
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+        worker_id: String,
+        provider: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -50,6 +56,18 @@ async fn main() {
                 .await
                 .unwrap_or_else(|e| {
                     eprintln!("Daemon error: {e}");
+                    std::process::exit(1);
+                });
+        }
+        Commands::Swap {
+            workspace,
+            worker_id,
+            provider,
+        } => {
+            kingdom_v2::cli::swap::run_swap(workspace, worker_id, provider)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("Swap error: {e}");
                     std::process::exit(1);
                 });
         }

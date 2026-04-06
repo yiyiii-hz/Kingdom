@@ -1,9 +1,10 @@
+use crate::failover::machine::FailoverCommand;
 use crate::mcp::dispatcher::Dispatcher;
 use crate::mcp::push::PushRegistry;
 use crate::mcp::queues::{HealthEventQueue, NotificationQueue, RequestAwaiterRegistry};
 use crate::storage::Storage;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 pub mod manager;
 pub mod worker;
@@ -16,7 +17,14 @@ pub fn register_manager_tools(
     health_events: Arc<Mutex<HealthEventQueue>>,
     awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
 ) {
-    manager::register(dispatcher, storage, push, notifications, health_events, awaiters);
+    manager::register(
+        dispatcher,
+        storage,
+        push,
+        notifications,
+        health_events,
+        awaiters,
+    );
 }
 
 pub fn register_worker_tools(
@@ -27,7 +35,14 @@ pub fn register_worker_tools(
     health_events: Arc<Mutex<HealthEventQueue>>,
     awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
 ) {
-    worker::register(dispatcher, storage, push, notifications, health_events, awaiters);
+    worker::register(
+        dispatcher,
+        storage,
+        push,
+        notifications,
+        health_events,
+        awaiters,
+    );
 }
 
 impl Dispatcher {
@@ -84,6 +99,7 @@ impl Dispatcher {
         health_events: Arc<Mutex<HealthEventQueue>>,
         awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
         launcher: Arc<crate::process::launcher::ProcessLauncher>,
+        failover_tx: mpsc::Sender<FailoverCommand>,
     ) -> Self {
         let mut dispatcher = Self::new();
         manager::register_with_launcher(
@@ -94,6 +110,7 @@ impl Dispatcher {
             Arc::clone(&health_events),
             Arc::clone(&awaiters),
             launcher,
+            Some(failover_tx),
         );
         register_worker_tools(
             &mut dispatcher,

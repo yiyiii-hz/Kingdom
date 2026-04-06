@@ -14,16 +14,32 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) {
+pub fn register(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+) {
     dispatcher.register(Box::new(WorkerCreateTool::new(
         Arc::clone(&storage),
         Arc::clone(&push),
         None,
     )));
-    dispatcher.register(Box::new(WorkerAssignTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerReleaseTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerGrantTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerRevokeTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerAssignTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerReleaseTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerGrantTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerRevokeTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(WorkerSwapTool::new(storage, push)));
 }
 
@@ -38,10 +54,22 @@ pub fn register_with_launcher(
         Arc::clone(&push),
         Some(launcher),
     )));
-    dispatcher.register(Box::new(WorkerAssignTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerReleaseTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerGrantTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(WorkerRevokeTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(WorkerAssignTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerReleaseTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerGrantTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(WorkerRevokeTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(WorkerSwapTool::new(storage, push)));
 }
 
@@ -137,13 +165,7 @@ impl Tool for WorkerCreateTool {
         session.workers.insert(worker_id.clone(), worker);
         session.worker_seq += 1;
         save_session(&self.storage, &session)?;
-        append_action_log(
-            &self.storage,
-            caller,
-            self.name(),
-            params,
-            None,
-        )?;
+        append_action_log(&self.storage, caller, self.name(), params, None)?;
         Ok(json!({ "worker_id": worker_id }))
     }
 }
@@ -381,11 +403,11 @@ mod tests {
     use crate::mcp::tools::manager::testsupport::{setup, ts, worker};
     use crate::process::launcher::ProcessLauncher;
     use crate::test_support::{env_lock, PathGuard};
+    use crate::types::{Job, JobStatus, Permission, WorkerStatus};
+    use serde_json::json;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
-    use crate::types::{Job, JobStatus, Permission, WorkerStatus};
-    use serde_json::json;
 
     fn write_executable(path: &std::path::Path, content: &str) {
         fs::write(path, content).unwrap();
@@ -416,8 +438,12 @@ mod tests {
     async fn worker_assign_updates_worker_and_job() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
-        session.jobs.insert("job_001".to_string(), pending_job("job_001"));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session
+            .jobs
+            .insert("job_001".to_string(), pending_job("job_001"));
         storage.save_session(&session).unwrap();
 
         let tool = WorkerAssignTool::new(Arc::clone(&storage), Arc::clone(&push));
@@ -438,7 +464,9 @@ mod tests {
         session
             .workers
             .insert("w1".to_string(), worker("w1", WorkerStatus::Running));
-        session.jobs.insert("job_001".to_string(), pending_job("job_001"));
+        session
+            .jobs
+            .insert("job_001".to_string(), pending_job("job_001"));
         storage.save_session(&session).unwrap();
 
         let tool = WorkerAssignTool::new(storage, push);
@@ -453,7 +481,9 @@ mod tests {
     async fn worker_assign_non_pending_job_returns_error() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
         let mut job = pending_job("job_001");
         job.status = JobStatus::Waiting;
         session.jobs.insert(job.id.clone(), job);
@@ -464,7 +494,9 @@ mod tests {
             .call(json!({"worker_id":"w1","job_id":"job_001"}), &caller)
             .await
             .unwrap_err();
-        assert!(matches!(error, McpError::InvalidState { message } if message == "JOB_NOT_PENDING"));
+        assert!(
+            matches!(error, McpError::InvalidState { message } if message == "JOB_NOT_PENDING")
+        );
     }
 
     #[tokio::test]
@@ -488,7 +520,9 @@ mod tests {
     async fn worker_release_idle_worker_terminates() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
         storage.save_session(&session).unwrap();
 
         let tool = WorkerReleaseTool::new(Arc::clone(&storage), Arc::clone(&push));
@@ -502,25 +536,39 @@ mod tests {
     async fn worker_grant_is_idempotent_and_revoke_removes_permission() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
         storage.save_session(&session).unwrap();
 
         let grant = WorkerGrantTool::new(Arc::clone(&storage), Arc::clone(&push));
         grant
-            .call(json!({"worker_id":"w1","permission":"workspace_read"}), &caller)
+            .call(
+                json!({"worker_id":"w1","permission":"workspace_read"}),
+                &caller,
+            )
             .await
             .unwrap();
         grant
-            .call(json!({"worker_id":"w1","permission":"workspace_read"}), &caller)
+            .call(
+                json!({"worker_id":"w1","permission":"workspace_read"}),
+                &caller,
+            )
             .await
             .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
-        assert_eq!(session.workers["w1"].permissions, vec![Permission::WorkspaceRead]);
+        assert_eq!(
+            session.workers["w1"].permissions,
+            vec![Permission::WorkspaceRead]
+        );
 
         let revoke = WorkerRevokeTool::new(Arc::clone(&storage), Arc::clone(&push));
         revoke
-            .call(json!({"worker_id":"w1","permission":"workspace_read"}), &caller)
+            .call(
+                json!({"worker_id":"w1","permission":"workspace_read"}),
+                &caller,
+            )
             .await
             .unwrap();
         let session = storage.load_session().unwrap().unwrap();
@@ -583,7 +631,10 @@ mod tests {
         );
 
         let result = tool
-            .call(json!({"provider":"codex","role":"worker"}), &crate::mcp::tools::manager::testsupport::manager_caller())
+            .call(
+                json!({"provider":"codex","role":"worker"}),
+                &crate::mcp::tools::manager::testsupport::manager_caller(),
+            )
             .await
             .unwrap();
 

@@ -13,8 +13,15 @@ use std::fs;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) {
-    dispatcher.register(Box::new(FileReadTool::new(Arc::clone(&storage), Arc::clone(&push))));
+pub fn register(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+) {
+    dispatcher.register(Box::new(FileReadTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(WorkspaceTreeTool::new(storage, push)));
 }
 
@@ -137,9 +144,13 @@ impl Tool for WorkspaceTreeTool {
             .output()
             .map_err(storage_error)?;
         if !output.status.success() {
-            return Err(storage_error(String::from_utf8_lossy(&output.stderr).trim()));
+            return Err(storage_error(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
-        Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
+        Ok(Value::String(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+        ))
     }
 }
 
@@ -166,7 +177,10 @@ mod tests {
         let (temp, storage, push, _notifications, _health, _awaiters, caller) = setup_worker();
         std::fs::write(temp.path().join("sample.txt"), "1\n2\n3\n4\n").unwrap();
         let tool = FileReadTool::new(Arc::clone(&storage), Arc::clone(&push));
-        let full = tool.call(json!({"path":"sample.txt"}), &caller).await.unwrap();
+        let full = tool
+            .call(json!({"path":"sample.txt"}), &caller)
+            .await
+            .unwrap();
         assert!(full.as_str().unwrap().contains("1\n2\n3\n4"));
         let lines = tool
             .call(json!({"path":"sample.txt","lines":"1-3"}), &caller)
@@ -177,6 +191,9 @@ mod tests {
             .call(json!({"path":"sample.txt","symbol":"foo"}), &caller)
             .await
             .unwrap();
-        assert!(symbol.as_str().unwrap().starts_with("# [symbol lookup not supported in M4"));
+        assert!(symbol
+            .as_str()
+            .unwrap()
+            .starts_with("# [symbol lookup not supported in M4"));
     }
 }

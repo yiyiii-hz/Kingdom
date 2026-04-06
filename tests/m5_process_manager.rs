@@ -32,10 +32,7 @@ fn kingdom_bin() -> PathBuf {
 }
 
 fn watchdog_bin() -> PathBuf {
-    kingdom_bin()
-        .parent()
-        .unwrap()
-        .join("kingdom-watchdog")
+    kingdom_bin().parent().unwrap().join("kingdom-watchdog")
 }
 
 fn fixture() -> (TempDir, PathBuf, PathBuf, PathBuf) {
@@ -83,6 +80,7 @@ fn default_session(workspace: &Path) -> Session {
         notification_mode: NotificationMode::Poll,
         pending_requests: HashMap::new(),
         pending_failovers: HashMap::new(),
+        provider_stability: HashMap::new(),
         created_at: Utc::now(),
     }
 }
@@ -172,6 +170,10 @@ fn kingdom_up_generates_kingdom_md_and_pid_files() {
     assert!(workspace.join("KINGDOM.md").exists());
     assert!(storage.root.join("daemon.pid").exists());
     assert!(storage.root.join("watchdog.pid").exists());
+    let session = storage.load_session().unwrap().unwrap();
+    assert_eq!(session.manager_id.as_deref(), Some("w0"));
+    assert_eq!(session.workers["w0"].provider, "codex");
+    assert!(session.available_providers.contains(&"codex".to_string()));
 
     let tmux = fs::read_to_string(tmux_log).unwrap();
     assert!(tmux.contains("new-session"));
@@ -200,7 +202,11 @@ fn kingdom_up_existing_session_prints_attach_hint() {
         toml::to_string(&cfg).unwrap(),
     )
     .unwrap();
-    fs::write(storage.root.join("daemon.pid"), format!("{}\n", std::process::id())).unwrap();
+    fs::write(
+        storage.root.join("daemon.pid"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
 
     let mut cmd = Command::new(bin_dir.join("kingdom"));
     cmd.arg("up").arg(&workspace);
@@ -266,8 +272,16 @@ fn kingdom_down_force_kills_daemon_and_watchdog_processes() {
 
     let daemon = Command::new("sleep").arg("30").spawn().unwrap();
     let watchdog = Command::new("sleep").arg("30").spawn().unwrap();
-    fs::write(storage.root.join("daemon.pid"), format!("{}\n", daemon.id())).unwrap();
-    fs::write(storage.root.join("watchdog.pid"), format!("{}\n", watchdog.id())).unwrap();
+    fs::write(
+        storage.root.join("daemon.pid"),
+        format!("{}\n", daemon.id()),
+    )
+    .unwrap();
+    fs::write(
+        storage.root.join("watchdog.pid"),
+        format!("{}\n", watchdog.id()),
+    )
+    .unwrap();
 
     let mut cmd = Command::new(bin_dir.join("kingdom"));
     cmd.arg("down").arg(&workspace).arg("--force");
@@ -398,7 +412,11 @@ fn daemon_command_writes_daemon_pid_file() {
     let mut cmd = Command::new(bin_dir.join("kingdom"));
     cmd.arg("daemon").arg(&workspace);
     set_path(&mut cmd, &bin_dir);
-    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
 
     let storage_root = workspace.join(".kingdom");
     assert!(wait_until(Duration::from_secs(2), || {

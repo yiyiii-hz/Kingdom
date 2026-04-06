@@ -75,11 +75,14 @@ impl Tool for ContextPingTool {
         worker.last_heartbeat = Some(Utc::now());
         save_session(&self.storage, &session)?;
         if let Some(urgency) = context_urgency(params.usage_pct) {
-            self.health_events.lock().await.push(HealthEvent::ContextThreshold {
-                worker_id,
-                pct: params.usage_pct,
-                urgency,
-            });
+            self.health_events
+                .lock()
+                .await
+                .push(HealthEvent::ContextThreshold {
+                    worker_id,
+                    pct: params.usage_pct,
+                    urgency,
+                });
         }
         Ok(Value::Null)
     }
@@ -119,8 +122,10 @@ impl Tool for ContextCheckpointDeferTool {
         let session = load_session(&self.storage)?;
         let worker = &session.workers[&worker_id(caller)?];
         if let Some(usage_pct) = worker.context_usage_pct {
-            if matches!(context_urgency(usage_pct), Some(crate::types::CheckpointUrgency::Critical))
-            {
+            if matches!(
+                context_urgency(usage_pct),
+                Some(crate::types::CheckpointUrgency::Critical)
+            ) {
                 return Err(McpError::ValidationFailed {
                     field: "urgency".to_string(),
                     reason: "cannot defer checkpoint at critical context usage".to_string(),
@@ -160,7 +165,10 @@ mod tests {
         let events = health.lock().await.drain();
         assert!(matches!(
             &events[0],
-            HealthEvent::ContextThreshold { urgency: CheckpointUrgency::High, .. }
+            HealthEvent::ContextThreshold {
+                urgency: CheckpointUrgency::High,
+                ..
+            }
         ));
     }
 
@@ -182,7 +190,10 @@ mod tests {
         storage.save_session(&session).unwrap();
         let tool = ContextCheckpointDeferTool::new(Arc::clone(&storage), Arc::clone(&push));
         let err = tool
-            .call(json!({"job_id":"job_001","reason":"later","eta_seconds":30}), &caller)
+            .call(
+                json!({"job_id":"job_001","reason":"later","eta_seconds":30}),
+                &caller,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ValidationFailed { field, .. } if field == "urgency"));
@@ -190,8 +201,11 @@ mod tests {
         let mut session = storage.load_session().unwrap().unwrap();
         session.workers.get_mut("w1").unwrap().context_usage_pct = Some(0.72);
         storage.save_session(&session).unwrap();
-        tool.call(json!({"job_id":"job_001","reason":"later","eta_seconds":30}), &caller)
-            .await
-            .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","reason":"later","eta_seconds":30}),
+            &caller,
+        )
+        .await
+        .unwrap();
     }
 }

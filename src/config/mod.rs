@@ -14,6 +14,8 @@ pub struct KingdomConfig {
     pub notifications: NotificationsConfig,
     #[serde(default)]
     pub health: HealthConfig,
+    #[serde(default)]
+    pub failover: FailoverConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -69,6 +71,7 @@ impl KingdomConfig {
             idle: IdleConfig::default(),
             notifications: NotificationsConfig::default(),
             health: HealthConfig::default(),
+            failover: FailoverConfig::default(),
         }
     }
 
@@ -117,6 +120,31 @@ impl Default for HealthConfig {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FailoverConfig {
+    pub window_minutes: u32,
+    pub failure_threshold: u32,
+    pub cooldown_seconds: u64,
+    pub connect_timeout_seconds: u64,
+    pub manual_stop_grace_seconds: u64,
+    pub swap_checkpoint_timeout_seconds: u64,
+    pub cancel_grace_seconds: u64,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            window_minutes: 10,
+            failure_threshold: 3,
+            cooldown_seconds: 30,
+            connect_timeout_seconds: 15,
+            manual_stop_grace_seconds: 5,
+            swap_checkpoint_timeout_seconds: 10,
+            cancel_grace_seconds: 30,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +179,17 @@ mod tests {
         assert_eq!(cfg.health.heartbeat_interval_seconds, 30);
         assert_eq!(cfg.health.heartbeat_timeout_count, 2);
         assert_eq!(cfg.health.progress_timeout_minutes, 30);
+    }
+
+    #[test]
+    fn failover_config_defaults() {
+        let cfg = KingdomConfig::default_config();
+        assert_eq!(cfg.failover.window_minutes, 10);
+        assert_eq!(cfg.failover.failure_threshold, 3);
+        assert_eq!(cfg.failover.cooldown_seconds, 30);
+        assert_eq!(cfg.failover.connect_timeout_seconds, 15);
+        assert_eq!(cfg.failover.manual_stop_grace_seconds, 5);
+        assert_eq!(cfg.failover.swap_checkpoint_timeout_seconds, 10);
+        assert_eq!(cfg.failover.cancel_grace_seconds, 30);
     }
 }

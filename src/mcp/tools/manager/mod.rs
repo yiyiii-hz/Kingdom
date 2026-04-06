@@ -1,3 +1,4 @@
+use crate::failover::machine::FailoverCommand;
 use crate::mcp::dispatcher::Dispatcher;
 use crate::mcp::error::McpError;
 use crate::mcp::push::PushRegistry;
@@ -14,7 +15,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 pub mod failover;
 pub mod job;
@@ -49,17 +50,23 @@ pub fn register_with_launcher(
     health_events: Arc<Mutex<HealthEventQueue>>,
     awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
     launcher: Arc<crate::process::launcher::ProcessLauncher>,
+    failover_tx: Option<mpsc::Sender<FailoverCommand>>,
 ) {
     let _ = (&notifications, &health_events);
     workspace::register(dispatcher, Arc::clone(&storage), Arc::clone(&push));
-    worker::register_with_launcher(dispatcher, Arc::clone(&storage), Arc::clone(&push), launcher);
+    worker::register_with_launcher(
+        dispatcher,
+        Arc::clone(&storage),
+        Arc::clone(&push),
+        launcher,
+    );
     job::register(
         dispatcher,
         Arc::clone(&storage),
         Arc::clone(&push),
         Arc::clone(&awaiters),
     );
-    failover::register(dispatcher, storage, push);
+    failover::register_with_machine(dispatcher, storage, push, failover_tx);
 }
 
 pub(crate) fn load_session(storage: &Storage) -> Result<Session, McpError> {
@@ -149,7 +156,10 @@ pub(crate) fn worker_mut<'a>(
         .ok_or_else(|| McpError::WorkerNotFound(worker_id.to_string()))
 }
 
-pub(crate) fn worker_ref<'a>(session: &'a Session, worker_id: &str) -> Result<&'a Worker, McpError> {
+pub(crate) fn worker_ref<'a>(
+    session: &'a Session,
+    worker_id: &str,
+) -> Result<&'a Worker, McpError> {
     session
         .workers
         .get(worker_id)
@@ -170,7 +180,11 @@ pub(crate) fn job_ref<'a>(session: &'a Session, job_id: &str) -> Result<&'a Job,
         .ok_or_else(|| McpError::JobNotFound(job_id.to_string()))
 }
 
-pub(crate) fn assign_job(session: &mut Session, worker_id: &str, job_id: &str) -> Result<(), McpError> {
+pub(crate) fn assign_job(
+    session: &mut Session,
+    worker_id: &str,
+    job_id: &str,
+) -> Result<(), McpError> {
     let worker_status = worker_ref(session, worker_id)?.status.clone();
     match worker_status {
         WorkerStatus::Idle => {}
@@ -225,7 +239,10 @@ fn note_scope_rank(scope: &NoteScope) -> u8 {
     }
 }
 
-pub(crate) fn load_result(storage: &Storage, job_id: &str) -> Result<crate::types::JobResult, McpError> {
+pub(crate) fn load_result(
+    storage: &Storage,
+    job_id: &str,
+) -> Result<crate::types::JobResult, McpError> {
     let path: PathBuf = storage.root.join("jobs").join(job_id).join("result.json");
     let bytes = std::fs::read(path).map_err(storage_error)?;
     serde_json::from_slice(&bytes).map_err(|error| McpError::Internal(error.to_string()))
@@ -316,7 +333,9 @@ pub(crate) mod testsupport {
             workspace_path: workspace_path.to_string(),
             workspace_hash: "hash".to_string(),
             manager_id: Some(manager.id.clone()),
-            workers: [(manager.id.clone(), manager)].into_iter().collect::<HashMap<_, _>>(),
+            workers: [(manager.id.clone(), manager)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             jobs: HashMap::new(),
             notes: vec![],
             worker_seq: 0,
@@ -327,11 +346,17 @@ pub(crate) mod testsupport {
             notification_mode: NotificationMode::Poll,
             pending_requests: HashMap::new(),
             pending_failovers: HashMap::new(),
+            provider_stability: HashMap::new(),
             created_at: ts(),
         }
     }
 
-    pub(crate) fn setup() -> (TempDir, Arc<Storage>, Arc<RwLock<PushRegistry>>, ConnectedClient) {
+    pub(crate) fn setup() -> (
+        TempDir,
+        Arc<Storage>,
+        Arc<RwLock<PushRegistry>>,
+        ConnectedClient,
+    ) {
         let temp = tempdir().unwrap();
         let storage = Arc::new(Storage::init(temp.path()).unwrap());
         let session = session_with_workspace(temp.path().to_str().unwrap());

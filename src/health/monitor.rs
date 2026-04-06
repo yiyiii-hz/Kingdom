@@ -434,6 +434,7 @@ mod tests {
             notification_mode: NotificationMode::Poll,
             pending_requests: HashMap::new(),
             pending_failovers: HashMap::new(),
+            provider_stability: HashMap::new(),
             created_at: Utc::now(),
         }
     }
@@ -855,9 +856,11 @@ mod tests {
         assert_eq!(parsed["params"]["urgency"], json!("Normal"));
 
         let mut second = String::new();
-        assert!(tokio::time::timeout(Duration::from_millis(100), reader.read_line(&mut second))
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), reader.read_line(&mut second))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -902,10 +905,19 @@ mod tests {
         assert!(entries
             .iter()
             .all(|entry| entry.actor == "kingdom-health" && entry.action == "health_event"));
-        assert_eq!(entries[0].params["HeartbeatMissed"]["worker_id"], json!("w1"));
+        assert_eq!(
+            entries[0].params["HeartbeatMissed"]["worker_id"],
+            json!("w1")
+        );
         assert_eq!(entries[1].params["ProcessExited"]["exit_code"], json!(-9));
-        assert_eq!(entries[2].params["ContextThreshold"]["urgency"], json!("Critical"));
-        assert_eq!(entries[3].params["ProgressTimeout"]["elapsed_minutes"], json!(31));
+        assert_eq!(
+            entries[2].params["ContextThreshold"]["urgency"],
+            json!("Critical")
+        );
+        assert_eq!(
+            entries[3].params["ProgressTimeout"]["elapsed_minutes"],
+            json!(31)
+        );
         assert_eq!(entries[4].params["RateLimited"]["attempt"], json!(2));
     }
 }

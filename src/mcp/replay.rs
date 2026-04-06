@@ -19,7 +19,9 @@ impl RecentCalls {
         let now = Instant::now();
         self.calls
             .get(&(worker_id.to_string(), jsonrpc_id.to_string()))
-            .and_then(|(created_at, value)| (now.duration_since(*created_at) <= TTL).then_some(value))
+            .and_then(|(created_at, value)| {
+                (now.duration_since(*created_at) <= TTL).then_some(value)
+            })
     }
 
     pub fn insert(&mut self, worker_id: &str, jsonrpc_id: &str, result: Value) {
@@ -61,7 +63,10 @@ mod tests {
         let mut calls = RecentCalls::new();
         calls.calls.insert(
             ("w1".to_string(), "1".to_string()),
-            (Instant::now() - TTL - std::time::Duration::from_secs(1), json!(null)),
+            (
+                Instant::now() - TTL - std::time::Duration::from_secs(1),
+                json!(null),
+            ),
         );
         assert!(calls.check("w1", "1").is_none());
     }
@@ -71,7 +76,10 @@ mod tests {
         let mut calls = RecentCalls::new();
         calls.calls.insert(
             ("w1".to_string(), "expired".to_string()),
-            (Instant::now() - TTL - std::time::Duration::from_secs(1), json!(1)),
+            (
+                Instant::now() - TTL - std::time::Duration::from_secs(1),
+                json!(1),
+            ),
         );
         calls.calls.insert(
             ("w1".to_string(), "fresh".to_string()),
@@ -80,7 +88,11 @@ mod tests {
 
         calls.evict_expired();
 
-        assert!(!calls.calls.contains_key(&("w1".to_string(), "expired".to_string())));
-        assert!(calls.calls.contains_key(&("w1".to_string(), "fresh".to_string())));
+        assert!(!calls
+            .calls
+            .contains_key(&("w1".to_string(), "expired".to_string())));
+        assert!(calls
+            .calls
+            .contains_key(&("w1".to_string(), "fresh".to_string())));
     }
 }

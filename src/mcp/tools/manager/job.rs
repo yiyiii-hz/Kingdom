@@ -24,12 +24,30 @@ pub fn register(
     push: Arc<RwLock<PushRegistry>>,
     awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
 ) {
-    dispatcher.register(Box::new(JobCreateTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(JobStatusTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(JobResultTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(JobCancelTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(JobKeepWaitingTool::new(Arc::clone(&storage), Arc::clone(&push))));
-    dispatcher.register(Box::new(JobUpdateTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(JobCreateTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(JobStatusTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(JobResultTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(JobCancelTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(JobKeepWaitingTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
+    dispatcher.register(Box::new(JobUpdateTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(JobRespondTool::new(storage, push, awaiters)));
 }
 
@@ -310,6 +328,69 @@ impl Tool for JobCancelTool {
                     .await
                     .map_err(super::storage_error)?;
             }
+
+            let storage = Arc::clone(&self.storage);
+            let worker_id = job.worker_id.clone();
+            let job_id = job.id.clone();
+            tokio::spawn(async move {
+                let config = crate::config::KingdomConfig::load_or_default(
+                    &storage.root.join("config.toml"),
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    config.failover.cancel_grace_seconds,
+                ))
+                .await;
+
+                let Ok(Some(mut session)) = storage.load_session() else {
+                    return;
+                };
+                let still_cancelling = session
+                    .jobs
+                    .get(&job_id)
+                    .map(|job| job.status == JobStatus::Cancelling)
+                    .unwrap_or(false);
+                if !still_cancelling {
+                    return;
+                }
+
+                if let Some(worker_id) = &worker_id {
+                    let pid = session.workers.get(worker_id).and_then(|worker| worker.pid);
+                    if let Some(pid) = pid {
+                        let launcher = crate::process::launcher::ProcessLauncher::new(
+                            std::path::PathBuf::from(&session.workspace_path),
+                            config.clone(),
+                            session.workspace_hash.clone(),
+                        );
+                        let _ = launcher.terminate(pid, false).await;
+                    }
+                }
+
+                if session.git_strategy != GitStrategy::None {
+                    let _ = std::process::Command::new("git")
+                        .args([
+                            "-C",
+                            &session.workspace_path,
+                            "stash",
+                            "push",
+                            "-m",
+                            &format!("[kingdom cancelled] {job_id}"),
+                        ])
+                        .status();
+                }
+
+                if let Some(job) = session.jobs.get_mut(&job_id) {
+                    job.status = JobStatus::Cancelled;
+                    job.updated_at = Utc::now();
+                }
+                if let Some(worker_id) = &worker_id {
+                    if let Some(worker) = session.workers.get_mut(worker_id) {
+                        worker.status = WorkerStatus::Idle;
+                        worker.job_id = None;
+                        worker.mcp_connected = false;
+                    }
+                }
+                let _ = storage.save_session(&session);
+            });
         } else {
             if let Some(job_mut) = session.jobs.get_mut(&job.id) {
                 job_mut.status = JobStatus::Cancelled;
@@ -415,7 +496,10 @@ impl Tool for JobUpdateTool {
             .ok_or_else(|| McpError::JobNotFound(params.job_id.clone()))?;
         job.intent = params.new_intent.clone();
         job.updated_at = Utc::now();
-        if matches!(job.status, JobStatus::Waiting | JobStatus::Paused | JobStatus::Failed) {
+        if matches!(
+            job.status,
+            JobStatus::Waiting | JobStatus::Paused | JobStatus::Failed
+        ) {
             job.status = JobStatus::Pending;
         }
         save_session(&self.storage, &session)?;
@@ -471,12 +555,13 @@ impl Tool for JobRespondTool {
         let params = parse_params::<JobRespondParams>(params)?;
         let mut session = load_session(&self.storage)?;
         let answer = params.answer.clone();
-        let request = session.pending_requests.get_mut(&params.request_id).ok_or_else(|| {
-            McpError::ValidationFailed {
+        let request = session
+            .pending_requests
+            .get_mut(&params.request_id)
+            .ok_or_else(|| McpError::ValidationFailed {
                 field: "request_id".to_string(),
                 reason: "not found".to_string(),
-            }
-        })?;
+            })?;
         request.answer = Some(answer.clone());
         request.answered = true;
         request.answered_at = Some(Utc::now());
@@ -500,6 +585,7 @@ impl Tool for JobRespondTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::KingdomConfig;
     use crate::mcp::dispatcher::Tool;
     use crate::mcp::queues::RequestAwaiterRegistry;
     use crate::mcp::tools::manager::testsupport::{
@@ -507,6 +593,7 @@ mod tests {
     };
     use crate::types::{ActionLogEntry, Job, JobStatus, WorkerStatus};
     use serde_json::json;
+    use std::fs;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::net::UnixStream;
     use tokio::sync::Mutex;
@@ -548,19 +635,26 @@ mod tests {
     async fn job_create_waits_for_incomplete_deps() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session
-            .jobs
-            .insert("job_001".to_string(), job_with_status("job_001", JobStatus::Pending));
+        session.jobs.insert(
+            "job_001".to_string(),
+            job_with_status("job_001", JobStatus::Pending),
+        );
         storage.save_session(&session).unwrap();
 
         let tool = JobCreateTool::new(Arc::clone(&storage), Arc::clone(&push));
         let job_id = tool
-            .call(json!({"intent":"Follow-up","depends_on":["job_001"]}), &caller)
+            .call(
+                json!({"intent":"Follow-up","depends_on":["job_001"]}),
+                &caller,
+            )
             .await
             .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
-        assert_eq!(session.jobs[job_id.as_str().unwrap()].status, JobStatus::Waiting);
+        assert_eq!(
+            session.jobs[job_id.as_str().unwrap()].status,
+            JobStatus::Waiting
+        );
     }
 
     #[tokio::test]
@@ -575,12 +669,18 @@ mod tests {
 
         let tool = JobCreateTool::new(Arc::clone(&storage), Arc::clone(&push));
         let job_id = tool
-            .call(json!({"intent":"Follow-up","depends_on":["job_001"]}), &caller)
+            .call(
+                json!({"intent":"Follow-up","depends_on":["job_001"]}),
+                &caller,
+            )
             .await
             .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
-        assert_eq!(session.jobs[job_id.as_str().unwrap()].status, JobStatus::Pending);
+        assert_eq!(
+            session.jobs[job_id.as_str().unwrap()].status,
+            JobStatus::Pending
+        );
     }
 
     #[tokio::test]
@@ -588,7 +688,10 @@ mod tests {
         let (_temp, storage, push, caller) = setup();
         let tool = JobCreateTool::new(storage, push);
         let error = tool
-            .call(json!({"intent":"Follow-up","depends_on":["job_999"]}), &caller)
+            .call(
+                json!({"intent":"Follow-up","depends_on":["job_999"]}),
+                &caller,
+            )
             .await
             .unwrap_err();
         assert!(matches!(error, McpError::JobNotFound(id) if id == "job_999"));
@@ -598,7 +701,9 @@ mod tests {
     async fn job_create_with_worker_auto_assigns() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
         storage.save_session(&session).unwrap();
 
         let tool = JobCreateTool::new(Arc::clone(&storage), Arc::clone(&push));
@@ -618,13 +723,16 @@ mod tests {
     async fn job_cancel_pending_sets_cancelled() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session
-            .jobs
-            .insert("job_001".to_string(), job_with_status("job_001", JobStatus::Pending));
+        session.jobs.insert(
+            "job_001".to_string(),
+            job_with_status("job_001", JobStatus::Pending),
+        );
         storage.save_session(&session).unwrap();
 
         let tool = JobCancelTool::new(Arc::clone(&storage), Arc::clone(&push));
-        tool.call(json!({"job_id":"job_001"}), &caller).await.unwrap();
+        tool.call(json!({"job_id":"job_001"}), &caller)
+            .await
+            .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(session.jobs["job_001"].status, JobStatus::Cancelled);
@@ -638,7 +746,9 @@ mod tests {
         push.write().await.register("w1", write_half);
 
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Running));
+        session
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Running));
         session.jobs.insert(
             "job_001".to_string(),
             Job {
@@ -649,7 +759,9 @@ mod tests {
         storage.save_session(&session).unwrap();
 
         let tool = JobCancelTool::new(Arc::clone(&storage), Arc::clone(&push));
-        tool.call(json!({"job_id":"job_001"}), &caller).await.unwrap();
+        tool.call(json!({"job_id":"job_001"}), &caller)
+            .await
+            .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(session.jobs["job_001"].status, JobStatus::Cancelling);
@@ -663,12 +775,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_cancel_timeout_force_sets_cancelled() {
+        let (_temp, storage, push, caller) = setup();
+        let (client, server) = UnixStream::pair().unwrap();
+        let (_, write_half) = tokio::io::split(server);
+        push.write().await.register("w1", write_half);
+
+        let mut cfg = KingdomConfig::default_config();
+        cfg.failover.cancel_grace_seconds = 0;
+        fs::write(
+            storage.root.join("config.toml"),
+            toml::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+
+        let mut session = storage.load_session().unwrap().unwrap();
+        let mut running_worker = worker("w1", WorkerStatus::Running);
+        running_worker.pid = Some(child.id());
+        session.workers.insert("w1".to_string(), running_worker);
+        session.jobs.insert(
+            "job_001".to_string(),
+            Job {
+                worker_id: Some("w1".to_string()),
+                ..job_with_status("job_001", JobStatus::Running)
+            },
+        );
+        storage.save_session(&session).unwrap();
+
+        let tool = JobCancelTool::new(Arc::clone(&storage), Arc::clone(&push));
+        tool.call(json!({"job_id":"job_001"}), &caller)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let session = storage.load_session().unwrap().unwrap();
+        assert_eq!(session.jobs["job_001"].status, JobStatus::Cancelled);
+        assert_eq!(session.workers["w1"].status, WorkerStatus::Idle);
+        assert!(session.workers["w1"].job_id.is_none());
+
+        let _ = client;
+    }
+
+    #[tokio::test]
     async fn job_cancel_logs_cascade_warning() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session
-            .jobs
-            .insert("job_001".to_string(), job_with_status("job_001", JobStatus::Pending));
+        session.jobs.insert(
+            "job_001".to_string(),
+            job_with_status("job_001", JobStatus::Pending),
+        );
         session.jobs.insert(
             "job_002".to_string(),
             Job {
@@ -679,7 +840,9 @@ mod tests {
         storage.save_session(&session).unwrap();
 
         let tool = JobCancelTool::new(Arc::clone(&storage), Arc::clone(&push));
-        tool.call(json!({"job_id":"job_001"}), &caller).await.unwrap();
+        tool.call(json!({"job_id":"job_001"}), &caller)
+            .await
+            .unwrap();
 
         let entries = storage.read_action_log(None).unwrap();
         assert!(entries.iter().any(|entry| {
@@ -713,7 +876,10 @@ mod tests {
             Some("Ship it")
         );
         let entries = storage.read_action_log(None).unwrap();
-        let entry = entries.iter().find(|entry| entry.action == "job.respond").unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.action == "job.respond")
+            .unwrap();
         assert_eq!(entry.params, json!({"request_id":"req_001"}));
         let entry_json = serde_json::to_string(entry).unwrap();
         assert!(!entry_json.contains("Ship it"));
@@ -723,15 +889,19 @@ mod tests {
     async fn job_update_waiting_resets_to_pending() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session
-            .jobs
-            .insert("job_001".to_string(), job_with_status("job_001", JobStatus::Waiting));
+        session.jobs.insert(
+            "job_001".to_string(),
+            job_with_status("job_001", JobStatus::Waiting),
+        );
         storage.save_session(&session).unwrap();
 
         let tool = JobUpdateTool::new(Arc::clone(&storage), Arc::clone(&push));
-        tool.call(json!({"job_id":"job_001","new_intent":"Rewrite impl"}), &caller)
-            .await
-            .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","new_intent":"Rewrite impl"}),
+            &caller,
+        )
+        .await
+        .unwrap();
 
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(session.jobs["job_001"].status, JobStatus::Pending);
@@ -776,10 +946,13 @@ mod tests {
     async fn all_mutating_job_tools_write_action_log_and_workspace_log_reads_entries() {
         let (_temp, storage, push, caller) = setup();
         let mut session = storage.load_session().unwrap().unwrap();
-        session.workers.insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
         session
-            .jobs
-            .insert("job_001".to_string(), job_with_status("job_001", JobStatus::Waiting));
+            .workers
+            .insert("w1".to_string(), worker("w1", WorkerStatus::Idle));
+        session.jobs.insert(
+            "job_001".to_string(),
+            job_with_status("job_001", JobStatus::Waiting),
+        );
         session
             .pending_requests
             .insert("req_001".to_string(), sample_pending_request());
@@ -805,12 +978,15 @@ mod tests {
             Arc::clone(&push),
             Arc::new(Mutex::new(RequestAwaiterRegistry::new())),
         )
-            .call(json!({"request_id":"req_001","answer":"yes"}), &caller)
-            .await
-            .unwrap();
+        .call(json!({"request_id":"req_001","answer":"yes"}), &caller)
+        .await
+        .unwrap();
 
         let entries = storage.read_action_log(None).unwrap();
-        let actions = entries.iter().map(|entry| entry.action.as_str()).collect::<Vec<_>>();
+        let actions = entries
+            .iter()
+            .map(|entry| entry.action.as_str())
+            .collect::<Vec<_>>();
         assert!(actions.contains(&"job.create"));
         assert!(actions.contains(&"job.keep_waiting"));
         assert!(actions.contains(&"job.update"));

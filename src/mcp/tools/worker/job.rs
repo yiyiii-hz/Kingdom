@@ -30,7 +30,10 @@ pub fn register(
     notifications: Arc<Mutex<NotificationQueue>>,
     awaiters: Arc<Mutex<RequestAwaiterRegistry>>,
 ) {
-    dispatcher.register(Box::new(JobProgressTool::new(Arc::clone(&storage), Arc::clone(&push))));
+    dispatcher.register(Box::new(JobProgressTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(JobCompleteTool::new(
         Arc::clone(&storage),
         Arc::clone(&push),
@@ -183,7 +186,8 @@ impl Tool for JobCompleteTool {
             .values()
             .filter(|job| {
                 job.status == crate::types::JobStatus::Waiting
-                    && job.depends_on
+                    && job
+                        .depends_on
                         .iter()
                         .all(|dep| session.jobs[dep].status == crate::types::JobStatus::Completed)
             })
@@ -555,12 +559,13 @@ impl Tool for JobRequestStatusTool {
         let _ = &self.push;
         let params = parse_params::<RequestIdParams>(params)?;
         let session = load_session(&self.storage)?;
-        let request = session.pending_requests.get(&params.request_id).ok_or_else(|| {
-            McpError::ValidationFailed {
+        let request = session
+            .pending_requests
+            .get(&params.request_id)
+            .ok_or_else(|| McpError::ValidationFailed {
                 field: "request_id".to_string(),
                 reason: "not found".to_string(),
-            }
-        })?;
+            })?;
         to_value(&RequestStatus {
             request_id: request.id.clone(),
             answered: request.answered,
@@ -630,13 +635,23 @@ mod tests {
     #[tokio::test]
     async fn job_complete_is_idempotent() {
         let (_temp, storage, push, notifications, _health, _awaiters, caller) = setup_worker();
-        let tool = JobCompleteTool::new(Arc::clone(&storage), Arc::clone(&push), Arc::clone(&notifications));
-        tool.call(json!({"job_id":"job_001","result_summary":long_text("done")}), &caller)
-            .await
-            .unwrap();
-        tool.call(json!({"job_id":"job_001","result_summary":long_text("done")}), &caller)
-            .await
-            .unwrap();
+        let tool = JobCompleteTool::new(
+            Arc::clone(&storage),
+            Arc::clone(&push),
+            Arc::clone(&notifications),
+        );
+        tool.call(
+            json!({"job_id":"job_001","result_summary":long_text("done")}),
+            &caller,
+        )
+        .await
+        .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","result_summary":long_text("done")}),
+            &caller,
+        )
+        .await
+        .unwrap();
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(session.jobs["job_001"].status, JobStatus::Completed);
     }
@@ -646,22 +661,34 @@ mod tests {
         let (_temp, storage, push, notifications, _health, _awaiters, caller) = setup_worker();
         let tool = JobCompleteTool::new(storage, push, notifications);
         let err = tool
-            .call(json!({"job_id":"job_001","result_summary":"too short"}), &caller)
+            .call(
+                json!({"job_id":"job_001","result_summary":"too short"}),
+                &caller,
+            )
             .await
             .unwrap_err();
-        assert!(matches!(err, McpError::ValidationFailed { field, .. } if field == "result_summary"));
+        assert!(
+            matches!(err, McpError::ValidationFailed { field, .. } if field == "result_summary")
+        );
     }
 
     #[tokio::test]
     async fn job_complete_none_strategy_has_no_changed_files() {
         let (_temp, storage, push, notifications, _health, _awaiters, caller) = setup_worker();
         let tool = JobCompleteTool::new(Arc::clone(&storage), push, Arc::clone(&notifications));
-        tool.call(json!({"job_id":"job_001","result_summary":long_text("done")}), &caller)
-            .await
-            .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","result_summary":long_text("done")}),
+            &caller,
+        )
+        .await
+        .unwrap();
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(
-            session.jobs["job_001"].result.as_ref().unwrap().changed_files,
+            session.jobs["job_001"]
+                .result
+                .as_ref()
+                .unwrap()
+                .changed_files,
             Vec::<String>::new()
         );
     }
@@ -702,12 +729,19 @@ mod tests {
         storage.save_session(&session).unwrap();
 
         let tool = JobCompleteTool::new(Arc::clone(&storage), push, Arc::clone(&notifications));
-        tool.call(json!({"job_id":"job_001","result_summary":long_text("done")}), &caller)
-            .await
-            .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","result_summary":long_text("done")}),
+            &caller,
+        )
+        .await
+        .unwrap();
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(
-            session.jobs["job_001"].result.as_ref().unwrap().changed_files,
+            session.jobs["job_001"]
+                .result
+                .as_ref()
+                .unwrap()
+                .changed_files,
             vec!["tracked.txt".to_string()]
         );
         assert_eq!(session.jobs["job_002"].status, JobStatus::Pending);
@@ -719,9 +753,12 @@ mod tests {
     async fn job_fail_sets_status_and_queues_notification() {
         let (_temp, storage, push, notifications, _health, _awaiters, caller) = setup_worker();
         let tool = JobFailTool::new(Arc::clone(&storage), push, Arc::clone(&notifications));
-        tool.call(json!({"job_id":"job_001","reason":"failure reason long enough"}), &caller)
-            .await
-            .unwrap();
+        tool.call(
+            json!({"job_id":"job_001","reason":"failure reason long enough"}),
+            &caller,
+        )
+        .await
+        .unwrap();
         let session = storage.load_session().unwrap().unwrap();
         assert_eq!(session.jobs["job_001"].status, JobStatus::Failed);
         let events = notifications.lock().await.drain();
@@ -812,7 +849,10 @@ mod tests {
         let (_temp, storage, push, notifications, _health, awaiters, caller) = setup_worker();
         let tool = JobRequestTool::new(storage, push, notifications, awaiters);
         let value = tool
-            .call(json!({"job_id":"job_001","question":"question long enough","blocking":false}), &caller)
+            .call(
+                json!({"job_id":"job_001","question":"question long enough","blocking":false}),
+                &caller,
+            )
             .await
             .unwrap();
         assert!(value["request_id"].as_str().unwrap().starts_with("req_"));
@@ -860,9 +900,15 @@ mod tests {
     async fn worker_job_status_checks_ownership() {
         let (_temp, storage, push, _notifications, _health, _awaiters, caller) = setup_worker();
         let tool = WorkerJobStatusTool::new(Arc::clone(&storage), push);
-        let ok = tool.call(json!({"job_id":"job_001"}), &caller).await.unwrap();
+        let ok = tool
+            .call(json!({"job_id":"job_001"}), &caller)
+            .await
+            .unwrap();
         assert_eq!(ok["id"], "job_001");
-        let err = tool.call(json!({"job_id":"job_999"}), &caller).await.unwrap_err();
+        let err = tool
+            .call(json!({"job_id":"job_999"}), &caller)
+            .await
+            .unwrap_err();
         assert!(matches!(err, McpError::Unauthorized { tool, .. } if tool == "job.status"));
     }
 }

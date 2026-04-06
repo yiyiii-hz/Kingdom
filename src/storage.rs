@@ -140,7 +140,9 @@ impl Storage {
             .lines()
             .filter_map(|line| match line {
                 Ok(line) if line.trim().is_empty() => None,
-                Ok(line) => Some(serde_json::from_str::<ActionLogEntry>(&line).map_err(StorageError::from)),
+                Ok(line) => {
+                    Some(serde_json::from_str::<ActionLogEntry>(&line).map_err(StorageError::from))
+                }
                 Err(error) => Some(Err(StorageError::from(error))),
             })
             .collect::<Result<Vec<_>>>()?;
@@ -182,7 +184,10 @@ impl Storage {
 fn render_handoff_markdown(brief: &HandoffBrief) -> String {
     let mut output = String::new();
     output.push_str(&format!("# Handoff for {}\n\n", brief.job_id));
-    output.push_str(&format!("## Original Intent\n{}\n\n", brief.original_intent));
+    output.push_str(&format!(
+        "## Original Intent\n{}\n\n",
+        brief.original_intent
+    ));
     output.push_str(&format!("## Done\n{}\n\n", brief.done));
     output.push_str(&format!("## In Progress\n{}\n\n", brief.in_progress));
     output.push_str(&format!("## Remaining\n{}\n\n", brief.remaining));
@@ -206,12 +211,11 @@ fn render_handoff_markdown(brief: &HandoffBrief) -> String {
     output
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{
-        CheckpointMeta, FailoverReason, GitStrategy, JobStatus, NotificationMode, NoteScope,
+        CheckpointMeta, FailoverReason, GitStrategy, JobStatus, NoteScope, NotificationMode,
         PendingFailover, PendingFailoverStatus, PendingRequest, Worker, WorkerRole, WorkerStatus,
         WorkspaceNote,
     };
@@ -307,7 +311,9 @@ mod tests {
             workspace_hash: "a3f9c2".to_string(),
             manager_id: Some("w0".to_string()),
             workers: [(worker.id.clone(), worker)].into_iter().collect(),
-            jobs: [("job_001".to_string(), sample_job())].into_iter().collect(),
+            jobs: [("job_001".to_string(), sample_job())]
+                .into_iter()
+                .collect(),
             notes: vec![WorkspaceNote {
                 id: "note_001".to_string(),
                 content: "note".to_string(),
@@ -321,7 +327,20 @@ mod tests {
             available_providers: vec!["codex".to_string()],
             notification_mode: NotificationMode::Push,
             pending_requests: [(request.id.clone(), request)].into_iter().collect(),
-            pending_failovers: [(failover.worker_id.clone(), failover)].into_iter().collect(),
+            pending_failovers: [(failover.worker_id.clone(), failover)]
+                .into_iter()
+                .collect(),
+            provider_stability: [(
+                "codex".to_string(),
+                crate::types::ProviderStability {
+                    provider: "codex".to_string(),
+                    crash_count: 1,
+                    timeout_count: 0,
+                    last_failure_at: Some(ts()),
+                },
+            )]
+            .into_iter()
+            .collect(),
             created_at: ts(),
         }
     }
@@ -452,7 +471,11 @@ mod tests {
         storage.save_result("job_001", &result).unwrap();
         storage.save_handoff("job_001", &handoff).unwrap();
 
-        let result_path = storage.root.join("jobs").join("job_001").join("result.json");
+        let result_path = storage
+            .root
+            .join("jobs")
+            .join("job_001")
+            .join("result.json");
         let handoff_path = storage.root.join("jobs").join("job_001").join("handoff.md");
 
         assert!(result_path.exists());

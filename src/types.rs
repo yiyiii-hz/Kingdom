@@ -10,7 +10,6 @@ pub type WorkerId = String;
 pub type CheckpointId = String;
 pub type NoteId = String;
 pub type RequestId = String;
-pub type FailoverId = String;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Job {
@@ -129,6 +128,8 @@ pub struct Session {
     pub notification_mode: NotificationMode,
     pub pending_requests: HashMap<RequestId, PendingRequest>,
     pub pending_failovers: HashMap<WorkerId, PendingFailover>,
+    #[serde(default)]
+    pub provider_stability: HashMap<String, ProviderStability>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -160,15 +161,12 @@ pub enum NotificationMode {
     Poll,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FailoverRequest {
-    pub id: FailoverId,
-    pub worker_id: WorkerId,
-    pub job_id: JobId,
-    pub reason: FailoverReason,
-    pub handoff_brief: HandoffBrief,
-    pub recommended_provider: Option<String>,
-    pub created_at: DateTime<Utc>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ProviderStability {
+    pub provider: String,
+    pub crash_count: u32,
+    pub timeout_count: u32,
+    pub last_failure_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -528,6 +526,16 @@ mod tests {
         let mut pending_failovers = HashMap::new();
         let failover = sample_pending_failover();
         pending_failovers.insert(failover.worker_id.clone(), failover);
+        let mut provider_stability = HashMap::new();
+        provider_stability.insert(
+            "codex".to_string(),
+            ProviderStability {
+                provider: "codex".to_string(),
+                crash_count: 1,
+                timeout_count: 0,
+                last_failure_at: Some(ts()),
+            },
+        );
 
         Session {
             id: "sess_a3f9c2b1".to_string(),
@@ -545,6 +553,7 @@ mod tests {
             notification_mode: NotificationMode::Push,
             pending_requests,
             pending_failovers,
+            provider_stability,
             created_at: ts(),
         }
     }

@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+pub mod failover;
 pub mod health;
 pub mod mcp;
 pub mod process;

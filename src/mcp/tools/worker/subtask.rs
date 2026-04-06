@@ -4,9 +4,7 @@ use crate::mcp::error::McpError;
 use crate::mcp::push::PushRegistry;
 use crate::mcp::queues::NotificationQueue;
 use crate::mcp::server::ConnectedClient;
-use crate::mcp::tools::manager::{
-    append_action_log, load_session, parse_params, save_session,
-};
+use crate::mcp::tools::manager::{append_action_log, load_session, parse_params, save_session};
 use crate::storage::Storage;
 use crate::types::{ManagerNotification, Permission, WorkerRole};
 use async_trait::async_trait;

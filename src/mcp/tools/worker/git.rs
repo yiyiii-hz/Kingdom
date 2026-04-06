@@ -13,8 +13,15 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub fn register(dispatcher: &mut Dispatcher, storage: Arc<Storage>, push: Arc<RwLock<PushRegistry>>) {
-    dispatcher.register(Box::new(GitLogTool::new(Arc::clone(&storage), Arc::clone(&push))));
+pub fn register(
+    dispatcher: &mut Dispatcher,
+    storage: Arc<Storage>,
+    push: Arc<RwLock<PushRegistry>>,
+) {
+    dispatcher.register(Box::new(GitLogTool::new(
+        Arc::clone(&storage),
+        Arc::clone(&push),
+    )));
     dispatcher.register(Box::new(GitDiffTool::new(storage, push)));
 }
 
@@ -60,7 +67,9 @@ impl Tool for GitLogTool {
             .output()
             .map_err(storage_error)?;
         if !output.status.success() {
-            return Err(storage_error(String::from_utf8_lossy(&output.stderr).trim()));
+            return Err(storage_error(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         let entries = String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -69,7 +78,9 @@ impl Tool for GitLogTool {
                 if parts.len() != 5 {
                     return None;
                 }
-                let timestamp = DateTime::parse_from_rfc3339(parts[3]).ok()?.with_timezone(&Utc);
+                let timestamp = DateTime::parse_from_rfc3339(parts[3])
+                    .ok()?
+                    .with_timezone(&Utc);
                 Some(GitLogEntry {
                     hash: parts[0].to_string(),
                     author: parts[1].to_string(),
@@ -120,8 +131,12 @@ impl Tool for GitDiffTool {
         }
         let output = cmd.output().map_err(storage_error)?;
         if !output.status.success() {
-            return Err(storage_error(String::from_utf8_lossy(&output.stderr).trim()));
+            return Err(storage_error(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
-        Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
+        Ok(Value::String(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+        ))
     }
 }

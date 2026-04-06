@@ -3,7 +3,7 @@ use crate::mcp::error::McpError;
 use crate::mcp::push::PushRegistry;
 use crate::mcp::replay::RecentCalls;
 use crate::storage::{Storage, StorageError};
-use crate::types::{NotificationMode, WorkerRole};
+use crate::types::{NotificationMode, WorkerRole, WorkerStatus};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -282,7 +282,12 @@ async fn handle_connection(
             None => continue,
         };
 
-        if let Some(cached_result) = recent_calls.lock().await.check(&dedupe_key, &jsonrpc_id).cloned() {
+        if let Some(cached_result) = recent_calls
+            .lock()
+            .await
+            .check(&dedupe_key, &jsonrpc_id)
+            .cloned()
+        {
             write_json_line(
                 &writer,
                 &json!({
@@ -438,7 +443,39 @@ async fn perform_hello(
 
     let connection_id = Uuid::new_v4().to_string();
     let worker_id = match role {
-        WorkerRole::Manager => None,
+        WorkerRole::Manager => {
+            let manager_id = params
+                .get("worker_id")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string())
+                .or_else(|| {
+                    session
+                        .manager_id
+                        .clone()
+                        .filter(|candidate| session.workers.contains_key(candidate))
+                });
+
+            if let Some(manager_id) = manager_id {
+                if session.manager_id.as_deref() != Some(manager_id.as_str()) {
+                    return Err(jsonrpc_error(
+                        request.get("id").cloned().unwrap_or(Value::Null),
+                        McpError::ValidationFailed {
+                            field: "worker_id".to_string(),
+                            reason: "manager mismatch".to_string(),
+                        },
+                    ));
+                }
+                if !session.workers.contains_key(&manager_id) {
+                    return Err(jsonrpc_error(
+                        request.get("id").cloned().unwrap_or(Value::Null),
+                        McpError::WorkerNotFound(manager_id),
+                    ));
+                }
+                Some(manager_id)
+            } else {
+                None
+            }
+        }
         WorkerRole::Worker => {
             let worker_id = params
                 .get("worker_id")
@@ -469,6 +506,11 @@ async fn perform_hello(
     if let Some(worker_id) = &worker_id {
         if let Some(worker) = updated_session.workers.get_mut(worker_id) {
             worker.mcp_connected = true;
+            worker.status = if worker.job_id.is_some() {
+                WorkerStatus::Running
+            } else {
+                WorkerStatus::Idle
+            };
         }
         if let Err(error) = storage.save_session(&updated_session) {
             return Err(json!({
@@ -553,9 +595,7 @@ mod tests {
     use crate::mcp::dispatcher::Dispatcher;
     use crate::mcp::error::McpError;
     use crate::storage::Storage;
-    use crate::types::{
-        GitStrategy, NotificationMode, Session, Worker, WorkerRole, WorkerStatus,
-    };
+    use crate::types::{GitStrategy, NotificationMode, Session, Worker, WorkerRole, WorkerStatus};
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -586,6 +626,22 @@ mod tests {
     }
 
     fn sample_session() -> Session {
+        let manager = Worker {
+            id: "w0".to_string(),
+            provider: "codex".to_string(),
+            role: WorkerRole::Manager,
+            status: WorkerStatus::Starting,
+            job_id: None,
+            pid: Some(100),
+            pane_id: "%0".to_string(),
+            mcp_connected: false,
+            context_usage_pct: None,
+            token_count: None,
+            last_heartbeat: None,
+            last_progress: None,
+            permissions: vec![],
+            started_at: chrono::Utc::now(),
+        };
         let worker = Worker {
             id: "w1".to_string(),
             provider: "codex".to_string(),
@@ -613,6 +669,7 @@ mod tests {
             workspace_hash: "test-hash".to_string(),
             manager_id: Some("w0".to_string()),
             workers: [
+                (manager.id.clone(), manager),
                 (worker.id.clone(), worker),
                 (worker_two.id.clone(), worker_two),
             ]
@@ -628,6 +685,7 @@ mod tests {
             notification_mode: NotificationMode::Poll,
             pending_requests: HashMap::new(),
             pending_failovers: HashMap::new(),
+            provider_stability: HashMap::new(),
             created_at: chrono::Utc::now(),
         }
     }
@@ -677,7 +735,30 @@ mod tests {
         let response = read_line(&mut client).await;
         assert_eq!(response["result"]["notification_mode"], "poll");
         assert_eq!(response["result"]["queued_notifications"], json!([]));
-        assert!(response["result"]["tools"].as_array().unwrap().contains(&json!("worker.create")));
+        assert!(response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("worker.create")));
+
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_hello_marks_manager_worker_connected() {
+        let (_temp, storage, server) = start_server("m2-manager-worker-hello").await;
+        let mut client = connect("m2-manager-worker-hello").await;
+
+        write_line(
+            &mut client,
+            json!({"jsonrpc":"2.0","id":"init","method":"kingdom.hello","params":{"role":"manager","session_id":"sess_abc123","worker_id":"w0"}}),
+        )
+        .await;
+
+        let response = read_line(&mut client).await;
+        assert!(response.get("result").is_some());
+        let session = storage.load_session().unwrap().unwrap();
+        assert!(session.workers["w0"].mcp_connected);
+        assert_eq!(session.workers["w0"].status, WorkerStatus::Idle);
 
         server.stop().await.unwrap();
     }
@@ -781,8 +862,12 @@ mod tests {
             workspace_hash: "m2-replay".to_string(),
             storage,
             dispatcher: Arc::new(dispatcher),
-            push_registry: Arc::new(tokio::sync::RwLock::new(crate::mcp::push::PushRegistry::new())),
-            recent_calls: Arc::new(tokio::sync::Mutex::new(crate::mcp::replay::RecentCalls::new())),
+            push_registry: Arc::new(tokio::sync::RwLock::new(
+                crate::mcp::push::PushRegistry::new(),
+            )),
+            recent_calls: Arc::new(tokio::sync::Mutex::new(
+                crate::mcp::replay::RecentCalls::new(),
+            )),
             active_connections: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             shutdown,
             listener_task: Arc::new(tokio::sync::Mutex::new(None)),
@@ -813,7 +898,8 @@ mod tests {
     #[tokio::test]
     async fn two_clients_can_connect_with_same_session_id() {
         let (_temp, _storage, server) = start_server("m2-multi-client").await;
-        let (mut first, mut second) = tokio::join!(connect("m2-multi-client"), connect("m2-multi-client"));
+        let (mut first, mut second) =
+            tokio::join!(connect("m2-multi-client"), connect("m2-multi-client"));
 
         let first_hello = write_line(
             &mut first,
