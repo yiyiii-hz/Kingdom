@@ -27,6 +27,7 @@ impl ProviderAdapter for ClaudeAdapter {
     fn build_args(&self, mcp_config_path: &Path, _role: WorkerRole) -> Vec<String> {
         vec![
             self.binary.to_string_lossy().into_owned(),
+            "--dangerously-skip-permissions".into(),
             "--mcp-config".into(),
             mcp_config_path.to_string_lossy().into_owned(),
         ]
